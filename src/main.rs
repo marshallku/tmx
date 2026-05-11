@@ -1,6 +1,6 @@
 use std::process::ExitCode;
 
-use tmux_powertools::cli;
+use tmx::cli;
 
 fn main() -> ExitCode {
     match cli::run() {

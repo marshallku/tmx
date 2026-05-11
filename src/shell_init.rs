@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 
-const ZSH_INIT: &str = r#"# tmux-powertools shell integration (zsh)
+const ZSH_INIT: &str = r#"# tmx shell integration (zsh)
 twt() {
     emulate -L zsh
     local print_only=0
@@ -13,7 +13,7 @@ twt() {
         esac
     done
     local out
-    out=$(command tmux-powertools worktree "${args[@]}")
+    out=$(command tmx worktree "${args[@]}")
     local rc=$?
     if (( rc != 0 )); then
         return $rc
@@ -42,7 +42,7 @@ mod tests {
     fn emit_zsh_contains_function_definition() {
         let out = emit("zsh").unwrap();
         assert!(out.contains("twt()"));
-        assert!(out.contains("tmux-powertools worktree"));
+        assert!(out.contains("tmx worktree"));
     }
 
     #[test]

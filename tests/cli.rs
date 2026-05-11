@@ -18,7 +18,7 @@ fn fake_bin(temp: &TempDir, name: &str, body: &str) -> PathBuf {
 }
 
 fn isolated_cmd(home: &Path, extra_bin: Option<&Path>) -> AssertCommand {
-    let mut cmd = AssertCommand::cargo_bin("tmux-powertools").unwrap();
+    let mut cmd = AssertCommand::cargo_bin("tmx").unwrap();
     cmd.env("HOME", home);
     cmd.env_remove("TMUX");
     cmd.env_remove("XDG_CONFIG_HOME");
@@ -54,7 +54,7 @@ fn version_flag_prints_version() {
         .arg("--version")
         .assert()
         .success()
-        .stdout(predicate::str::contains("tmux-powertools"));
+        .stdout(predicate::str::contains("tmx"));
 }
 
 #[test]
@@ -79,7 +79,7 @@ fn shell_init_zsh_emits_twt_function() {
         .assert()
         .success()
         .stdout(predicate::str::contains("twt()"))
-        .stdout(predicate::str::contains("tmux-powertools worktree"));
+        .stdout(predicate::str::contains("tmx worktree"));
 }
 
 #[test]
@@ -253,7 +253,7 @@ fn worktree_respects_naming_from_config() {
     let repo = temp.path().join("myproj");
     init_repo(&repo);
 
-    let cfg_dir = temp.path().join(".config").join("tmux-powertools");
+    let cfg_dir = temp.path().join(".config").join("tmx");
     std::fs::create_dir_all(&cfg_dir).unwrap();
     std::fs::write(
         cfg_dir.join("config.toml"),
@@ -296,7 +296,7 @@ fn worktree_runs_post_create_script_when_configured() {
     perms.set_mode(0o755);
     std::fs::set_permissions(&script_path, perms).unwrap();
 
-    let cfg_dir = temp.path().join(".config").join("tmux-powertools");
+    let cfg_dir = temp.path().join(".config").join("tmx");
     std::fs::create_dir_all(&cfg_dir).unwrap();
     std::fs::write(
         cfg_dir.join("config.toml"),
@@ -325,7 +325,7 @@ fn worktree_runs_post_create_script_when_configured() {
 #[test]
 fn selector_with_empty_roots_prints_help_message() {
     let temp = TempDir::new().unwrap();
-    let cfg_dir = temp.path().join(".config").join("tmux-powertools");
+    let cfg_dir = temp.path().join(".config").join("tmx");
     std::fs::create_dir_all(&cfg_dir).unwrap();
     std::fs::write(cfg_dir.join("config.toml"), "roots = []\n").unwrap();
 

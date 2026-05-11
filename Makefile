@@ -1,4 +1,4 @@
-BINARY_NAME := tmux-powertools
+BINARY_NAME := tmx
 INSTALL_DIR := $(HOME)/.local/bin
 
 .PHONY: build install uninstall clean test fmt lint check

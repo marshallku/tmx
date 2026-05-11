@@ -10,7 +10,7 @@ use crate::worktree;
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "tmux-powertools",
+    name = "tmx",
     about = "Project-aware tmux session manager",
     long_about = "Scan project directories, show git status, and manage tmux sessions with project-type layouts.",
     version
@@ -36,7 +36,7 @@ enum Command {
 
     /// Create a sibling git worktree for the current repo
     #[command(
-        long_about = "Create a sibling git worktree, optionally run a post-create script,\nand optionally spawn a tmux session at the new worktree.\n\nWorktree is placed next to the source repo (sibling), named via the\n'worktree.naming' template in ~/.config/tmux-powertools/config.toml\n(default: '{repo}-{branch}'). Slashes in branch names are replaced\nwith dashes for the directory name."
+        long_about = "Create a sibling git worktree, optionally run a post-create script,\nand optionally spawn a tmux session at the new worktree.\n\nWorktree is placed next to the source repo (sibling), named via the\n'worktree.naming' template in ~/.config/tmx/config.toml\n(default: '{repo}-{branch}'). Slashes in branch names are replaced\nwith dashes for the directory name."
     )]
     Worktree {
         /// New branch to create (also used to derive the directory name)
@@ -54,7 +54,7 @@ enum Command {
     /// Emit shell integration code (defines the 'twt' wrapper)
     #[command(
         name = "shell-init",
-        long_about = "Emit shell initialization code that defines a 'twt' function\nwrapping 'tmux-powertools worktree' to cd into the new worktree by default.\n\nAdd to your shell rc:\n\n    eval \"$(tmux-powertools shell-init zsh)\"\n\nThen:\n\n    twt feat-x           # create worktree and cd into it\n    twt feat-x -p        # create worktree and print path (no cd)\n    twt feat-x --tmux    # create worktree and switch to a new tmux session\n\nSupported shells: zsh."
+        long_about = "Emit shell initialization code that defines a 'twt' function\nwrapping 'tmx worktree' to cd into the new worktree by default.\n\nAdd to your shell rc:\n\n    eval \"$(tmx shell-init zsh)\"\n\nThen:\n\n    twt feat-x           # create worktree and cd into it\n    twt feat-x -p        # create worktree and print path (no cd)\n    twt feat-x --tmux    # create worktree and switch to a new tmux session\n\nSupported shells: zsh."
     )]
     ShellInit {
         /// Shell name (currently only 'zsh')
@@ -81,7 +81,7 @@ fn run_selector() -> Result<()> {
     let cfg = Config::load();
     let projects = project::scan_projects(&cfg);
     if projects.is_empty() {
-        println!("No projects found. Configure roots in ~/.config/tmux-powertools/config.toml");
+        println!("No projects found. Configure roots in ~/.config/tmx/config.toml");
         println!("Example: roots = [\"~/dev\"]");
         return Ok(());
     }
@@ -169,7 +169,7 @@ fn run_worktree(branch: &str, with_tmux: bool, from: &str) -> Result<()> {
         return tmux::switch_session(&session_name).context("switch tmux session");
     }
 
-    // No --tmux: print the path on stdout so callers can `cd $(tmux-powertools worktree ...)`.
+    // No --tmux: print the path on stdout so callers can `cd $(tmx worktree ...)`.
     println!("{}", res.worktree_path.display());
     Ok(())
 }

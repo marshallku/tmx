@@ -1,12 +1,12 @@
 [package]
-name = "tmux-powertools"
+name = "tmx"
 version = "0.1.0"
 edition = "2024"
 description = "Project-aware tmux session manager"
 license = "MIT"
 
 [[bin]]
-name = "tmux-powertools"
+name = "tmx"
 path = "src/main.rs"
 
 [dependencies]

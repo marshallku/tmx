@@ -146,7 +146,7 @@ fn render(frame: &mut Frame, model: &Model) {
         .split(area);
 
     frame.render_widget(
-        Paragraph::new(Span::styled("  tmux-powertools", theme::title_style())),
+        Paragraph::new(Span::styled("  tmx", theme::title_style())),
         layout[0],
     );
 

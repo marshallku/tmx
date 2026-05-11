@@ -98,7 +98,7 @@ pub fn config_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".config")
-        .join("tmux-powertools")
+        .join("tmx")
         .join("config.toml")
 }
 
