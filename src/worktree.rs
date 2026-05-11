@@ -206,8 +206,8 @@ mod tests {
     #[test]
     fn render_naming_custom_pattern() {
         assert_eq!(
-            render_naming("wt_{repo}_{branch}_v2", "tmux-powertools", "feat/cool"),
-            "wt_tmux-powertools_feat-cool_v2"
+            render_naming("wt_{repo}_{branch}_v2", "my-project", "feat/cool"),
+            "wt_my-project_feat-cool_v2"
         );
     }
 

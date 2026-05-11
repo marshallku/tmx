@@ -38,8 +38,8 @@ mod tests {
 
     #[test]
     fn fuzzy_match_subsequence_hits() {
-        assert!(fuzzy_match("tmux-powertools", "tmx"));
-        assert!(fuzzy_match("tmux-powertools", "tpt"));
+        assert!(fuzzy_match("session-manager", "sm"));
+        assert!(fuzzy_match("project-selector", "pjsl"));
         assert!(fuzzy_match("Hello World", "hw"));
     }
 
