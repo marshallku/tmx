@@ -52,8 +52,8 @@ func runSelector(cmd *cobra.Command, args []string) error {
 	projects := project.ScanProjects(cfg)
 
 	if len(projects) == 0 {
-		fmt.Println("No projects found. Configure roots in ~/.config/tmux-powertools/config.json")
-		fmt.Println("Example: {\"roots\": [\"~/projects\", \"~/work\"]}")
+		fmt.Println("No projects found. Configure roots in ~/.config/tmux-powertools/config.toml")
+		fmt.Println("Example: roots = [\"~/dev\"]")
 		return nil
 	}
 
