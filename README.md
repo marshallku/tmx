@@ -45,7 +45,7 @@ Prebuilt binaries are produced for:
 
 ## Releasing
 
-Releases are driven by [`cargo-dist`](https://github.com/astral-sh/cargo-dist). To cut a new release:
+Releases are driven by [`cargo-dist`](https://github.com/axodotdev/cargo-dist). To cut a new release:
 
 ```sh
 # bump version in Cargo.toml, commit, then:
