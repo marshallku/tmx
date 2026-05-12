@@ -114,6 +114,34 @@ pub fn kill_session(name: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// Kill a session by its stable id (e.g. `$3`). Safer than by name when
+/// sessions may be renamed concurrently.
+pub fn kill_session_id(id: &str) -> io::Result<()> {
+    let status = Command::new("tmux")
+        .args(["kill-session", "-t", id])
+        .status()?;
+    if !status.success() {
+        return Err(io::Error::other(format!(
+            "tmux kill-session exited with status {status}"
+        )));
+    }
+    Ok(())
+}
+
+/// Return the current tmux session id (e.g. `$3`), or `None` if not inside
+/// a tmux server or the query fails.
+pub fn current_session_id() -> Option<String> {
+    let output = Command::new("tmux")
+        .args(["display-message", "-p", "#{session_id}"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if id.is_empty() { None } else { Some(id) }
+}
+
 pub fn apply_layout(session_name: &str, _project_type: &str) -> io::Result<()> {
     Command::new("tmux")
         .args([

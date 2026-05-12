@@ -197,7 +197,7 @@ fn worktree_outside_git_repo_fails() {
     std::fs::create_dir_all(&cwd).unwrap();
     isolated_cmd(temp.path(), None)
         .current_dir(&cwd)
-        .args(["worktree", "foo"])
+        .args(["worktree", "create", "foo"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("not inside a git repository"));
@@ -211,7 +211,7 @@ fn worktree_creates_sibling_and_prints_path_to_stdout() {
 
     let assert = isolated_cmd(temp.path(), None)
         .current_dir(&repo)
-        .args(["worktree", "feat/x"])
+        .args(["worktree", "create", "feat/x"])
         .assert()
         .success();
     let output = assert.get_output();
@@ -241,10 +241,22 @@ fn worktree_target_exists_fails() {
 
     isolated_cmd(temp.path(), None)
         .current_dir(&repo)
-        .args(["worktree", "feat"])
+        .args(["worktree", "create", "feat"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("target path already exists"));
+}
+
+#[test]
+fn worktree_without_subcommand_prints_help_and_exits_nonzero() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("myproj");
+    init_repo(&repo);
+    isolated_cmd(temp.path(), None)
+        .current_dir(&repo)
+        .arg("worktree")
+        .assert()
+        .failure();
 }
 
 #[test]
@@ -263,7 +275,7 @@ fn worktree_respects_naming_from_config() {
 
     let assert = isolated_cmd(temp.path(), None)
         .current_dir(&repo)
-        .args(["worktree", "feat/x"])
+        .args(["worktree", "create", "feat/x"])
         .assert()
         .success();
     let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
@@ -310,7 +322,7 @@ fn worktree_runs_post_create_script_when_configured() {
 
     isolated_cmd(temp.path(), None)
         .current_dir(&repo)
-        .args(["worktree", "feat"])
+        .args(["worktree", "create", "feat"])
         .assert()
         .success()
         .stderr(predicate::str::contains("Ran post-create script"));
@@ -320,6 +332,231 @@ fn worktree_runs_post_create_script_when_configured() {
         "post-create marker {} should exist",
         marker.display()
     );
+}
+
+fn add_worktree(repo: &Path, branch: &str, wt_path: &Path) {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["worktree", "add", "-b", branch])
+        .arg(wt_path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("git worktree add");
+    assert!(status.success());
+}
+
+#[test]
+fn worktree_rm_removes_when_no_conflict() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("myproj");
+    init_repo(&repo);
+    let wt = temp.path().join("myproj-rm1");
+    add_worktree(&repo, "rm1", &wt);
+    // Fake tmux: not running.
+    let bin = fake_bin(&temp, "tmux", "#!/usr/bin/env bash\nexit 1\n");
+
+    isolated_cmd(temp.path(), Some(&bin))
+        .current_dir(&repo)
+        .args(["worktree", "rm", &wt.to_string_lossy()])
+        .assert()
+        .success();
+    assert!(!wt.exists());
+}
+
+#[test]
+fn worktree_rm_blocked_by_attached_session_without_force() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("myproj");
+    init_repo(&repo);
+    let wt = temp.path().join("myproj-rm2");
+    add_worktree(&repo, "rm2", &wt);
+    // Fake tmux: list-panes reports a session whose pane is inside wt.
+    let script = format!(
+        "#!/usr/bin/env bash
+case \"$1\" in
+  list-panes)
+    printf '$5\\trm2-session\\t{wt}\\n'
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+",
+        wt = wt.to_string_lossy()
+    );
+    let bin = fake_bin(&temp, "tmux", &script);
+
+    isolated_cmd(temp.path(), Some(&bin))
+        .current_dir(&repo)
+        .args(["worktree", "rm", &wt.to_string_lossy()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("rm2-session"))
+        .stderr(predicate::str::contains("--force"));
+    assert!(wt.exists());
+}
+
+#[test]
+fn worktree_rm_force_kills_attached_session_and_removes() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("myproj");
+    init_repo(&repo);
+    let wt = temp.path().join("myproj-rm3");
+    add_worktree(&repo, "rm3", &wt);
+    let killed_log = temp.path().join("killed.txt");
+    let script = format!(
+        "#!/usr/bin/env bash
+case \"$1\" in
+  list-panes)
+    printf '$7\\trm3-session\\t{wt}\\n'
+    ;;
+  kill-session)
+    shift; printf '%s\\n' \"$@\" >> {log}
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+",
+        wt = wt.to_string_lossy(),
+        log = killed_log.to_string_lossy()
+    );
+    let bin = fake_bin(&temp, "tmux", &script);
+
+    isolated_cmd(temp.path(), Some(&bin))
+        .current_dir(&repo)
+        .args(["worktree", "rm", &wt.to_string_lossy(), "--force"])
+        .assert()
+        .success();
+    let log = std::fs::read_to_string(&killed_log).unwrap();
+    assert!(
+        log.contains("$7"),
+        "kill-session should be called with $7, got: {log}"
+    );
+    assert!(!wt.exists());
+}
+
+#[test]
+fn worktree_rm_refuses_when_cwd_inside_target() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("myproj");
+    init_repo(&repo);
+    let wt = temp.path().join("myproj-rm4");
+    add_worktree(&repo, "rm4", &wt);
+    let bin = fake_bin(&temp, "tmux", "#!/usr/bin/env bash\nexit 1\n");
+
+    isolated_cmd(temp.path(), Some(&bin))
+        .current_dir(&wt)
+        .args(["worktree", "rm", &wt.to_string_lossy(), "--force"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("current working directory"));
+    assert!(wt.exists());
+}
+
+#[test]
+fn worktree_rm_refuses_when_current_tmux_session_attached() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("myproj");
+    init_repo(&repo);
+    let wt = temp.path().join("myproj-rm5");
+    add_worktree(&repo, "rm5", &wt);
+    // Fake tmux:
+    //   display-message prints session id $5 (matches the offender)
+    //   list-panes reports a pane in wt with session id $5
+    let script = format!(
+        "#!/usr/bin/env bash
+case \"$1\" in
+  display-message)
+    printf '$5\\n'
+    ;;
+  list-panes)
+    printf '$5\\tself\\t{wt}\\n'
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+",
+        wt = wt.to_string_lossy()
+    );
+    let bin = fake_bin(&temp, "tmux", &script);
+
+    let mut cmd = isolated_cmd(temp.path(), Some(&bin));
+    cmd.env("TMUX", "/tmp/fake-tmux-socket,1234,0");
+    cmd.current_dir(&repo)
+        .args(["worktree", "rm", &wt.to_string_lossy(), "--force"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("current tmux session"));
+    assert!(wt.exists());
+}
+
+#[test]
+fn worktree_rm_fail_closed_when_in_tmux_and_list_panes_fails() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("myproj");
+    init_repo(&repo);
+    let wt = temp.path().join("myproj-rm6");
+    add_worktree(&repo, "rm6", &wt);
+    // Fake tmux: display-message succeeds, list-panes fails.
+    let script = "#!/usr/bin/env bash
+case \"$1\" in
+  display-message)
+    printf '$9\\n'
+    ;;
+  list-panes)
+    exit 1
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+";
+    let bin = fake_bin(&temp, "tmux", script);
+
+    let mut cmd = isolated_cmd(temp.path(), Some(&bin));
+    cmd.env("TMUX", "/tmp/fake-tmux-socket,1234,0");
+    cmd.current_dir(&repo)
+        .args(["worktree", "rm", &wt.to_string_lossy(), "--force"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("refusing to proceed"));
+    assert!(wt.exists());
+}
+
+#[test]
+fn worktree_rm_resolves_short_branch_name() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("myproj");
+    init_repo(&repo);
+    let wt = temp.path().join("myproj-rm7");
+    add_worktree(&repo, "rm7", &wt);
+    let bin = fake_bin(&temp, "tmux", "#!/usr/bin/env bash\nexit 1\n");
+
+    isolated_cmd(temp.path(), Some(&bin))
+        .current_dir(&repo)
+        .args(["worktree", "rm", "rm7"])
+        .assert()
+        .success();
+    assert!(!wt.exists());
+}
+
+#[test]
+fn worktree_rm_no_match_errors() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("myproj");
+    init_repo(&repo);
+    let bin = fake_bin(&temp, "tmux", "#!/usr/bin/env bash\nexit 1\n");
+
+    isolated_cmd(temp.path(), Some(&bin))
+        .current_dir(&repo)
+        .args(["worktree", "rm", "does-not-exist"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no worktree matches"));
 }
 
 #[test]
