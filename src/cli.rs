@@ -72,6 +72,19 @@ enum WorktreeCommand {
         from: Option<String>,
     },
 
+    /// List worktrees and print the chosen path on stdout
+    #[command(
+        long_about = "Print a worktree path on stdout, intended for shell wrappers (`cd \"$(tmx worktree list)\"`).\n\nWith no target, an interactive picker is shown on stderr (so stdout stays clean for `$(...)` capture).\nWith a target (path or short branch), the resolved path is printed directly.\nWith --plain, all worktrees are dumped as 'path  branch  [flags]' lines on stdout."
+    )]
+    List {
+        /// Worktree path or short branch name. Picker shown if omitted.
+        target: Option<String>,
+
+        /// Dump all worktrees as plain text instead of running the picker.
+        #[arg(long = "plain")]
+        plain: bool,
+    },
+
     /// Remove a sibling git worktree (fuzzy picker if no target given)
     #[command(
         long_about = "Remove a worktree by exact path or short branch name (e.g. 'feat-x').\nIf no target is provided, an interactive picker is shown.\n\nSafety rules (apply even with --force):\n  - Locked worktrees are refused; run 'git worktree unlock' first.\n  - The worktree containing the current working directory is refused.\n  - The worktree containing the current tmux session is refused.\n\nWithout --force, any tmux session attached to the worktree blocks removal.\nWith --force, attached sessions are killed (by id) and 'git worktree remove --force'\nis used (covers dirty worktrees)."
@@ -98,6 +111,7 @@ pub fn run() -> Result<()> {
             WorktreeCommand::Create { branch, tmux, from } => {
                 run_worktree_create(&branch, tmux, from.as_deref().unwrap_or(""))
             }
+            WorktreeCommand::List { target, plain } => run_worktree_list(target.as_deref(), plain),
             WorktreeCommand::Rm { target, force } => run_worktree_rm(target.as_deref(), force),
         },
         Some(Command::ShellInit { shell }) => run_shell_init(&shell),
@@ -198,6 +212,55 @@ fn run_worktree_create(branch: &str, with_tmux: bool, from: &str) -> Result<()> 
 
     // No --tmux: print the path on stdout so callers can `cd $(tmx worktree create ...)`.
     println!("{}", res.worktree_path.display());
+    Ok(())
+}
+
+fn run_worktree_list(target: Option<&str>, plain: bool) -> Result<()> {
+    let cwd = std::env::current_dir().context("resolve cwd")?;
+    let entries = worktree::list_entries(&cwd)?;
+
+    if plain {
+        for e in &entries {
+            let branch = e
+                .branch
+                .as_deref()
+                .map(worktree::short_branch)
+                .unwrap_or("(detached)");
+            let mut flags: Vec<&str> = Vec::new();
+            if e.is_main {
+                flags.push("main");
+            }
+            if e.locked {
+                flags.push("locked");
+            }
+            if e.prunable {
+                flags.push("prunable");
+            }
+            let suffix = if flags.is_empty() {
+                String::new()
+            } else {
+                format!("  [{}]", flags.join(","))
+            };
+            println!("{}\t{}{}", e.path.display(), branch, suffix);
+        }
+        return Ok(());
+    }
+
+    if let Some(t) = target {
+        // `list` is non-destructive, so the main worktree is a valid target.
+        let entry = worktree::resolve_target_any(&entries, t)?;
+        println!("{}", entry.path.display());
+        return Ok(());
+    }
+
+    if entries.is_empty() {
+        return Ok(());
+    }
+
+    let Some(selected) = ui::run_worktree_picker_stderr(entries)? else {
+        return Ok(());
+    };
+    println!("{}", selected.path.display());
     Ok(())
 }
 

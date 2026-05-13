@@ -1,8 +1,13 @@
+use std::io;
 use std::time::Duration;
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::backend::Backend;
+use crossterm::execute;
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
+use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -42,6 +47,31 @@ impl Drop for TerminalGuard {
 pub fn run_picker<T: PickerItem>(items: Vec<T>, config: PickerConfig<'_>) -> Result<Option<T>> {
     let _guard = TerminalGuard;
     let mut terminal = TerminalGuard::enter();
+    run_loop(&mut terminal, items, &config)
+}
+
+/// RAII guard that renders the picker on **stderr** so stdout can be reserved
+/// for the selected path (consumed by shell wrappers like `twt`).
+struct StderrGuard;
+
+impl Drop for StderrGuard {
+    fn drop(&mut self) {
+        let _ = execute!(io::stderr(), LeaveAlternateScreen);
+        let _ = disable_raw_mode();
+    }
+}
+
+pub fn run_picker_stderr<T: PickerItem>(
+    items: Vec<T>,
+    config: PickerConfig<'_>,
+) -> Result<Option<T>> {
+    enable_raw_mode()?;
+    // Install the guard *before* anything that can fail so raw mode is
+    // disabled if `EnterAlternateScreen` or terminal construction errors out.
+    let _guard = StderrGuard;
+    execute!(io::stderr(), EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(io::stderr());
+    let mut terminal = Terminal::new(backend)?;
     run_loop(&mut terminal, items, &config)
 }
 

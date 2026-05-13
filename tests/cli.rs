@@ -348,6 +348,79 @@ fn add_worktree(repo: &Path, branch: &str, wt_path: &Path) {
 }
 
 #[test]
+fn worktree_list_plain_dumps_all_entries() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("myproj");
+    init_repo(&repo);
+    let wt = temp.path().join("myproj-ls1");
+    add_worktree(&repo, "ls1", &wt);
+
+    let assert = isolated_cmd(temp.path(), None)
+        .current_dir(&repo)
+        .args(["worktree", "list", "--plain"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    assert!(
+        stdout.contains(repo.to_string_lossy().as_ref()),
+        "stdout: {stdout}"
+    );
+    assert!(stdout.contains("main"), "stdout: {stdout}");
+    assert!(
+        stdout.contains(wt.to_string_lossy().as_ref()),
+        "stdout: {stdout}"
+    );
+    assert!(stdout.contains("ls1"), "stdout: {stdout}");
+}
+
+#[test]
+fn worktree_list_with_target_prints_resolved_path() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("myproj");
+    init_repo(&repo);
+    let wt = temp.path().join("myproj-ls2");
+    add_worktree(&repo, "ls2", &wt);
+
+    let assert = isolated_cmd(temp.path(), None)
+        .current_dir(&repo)
+        .args(["worktree", "list", "ls2"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    assert_eq!(stdout.trim(), wt.to_string_lossy().trim_end_matches('/'));
+}
+
+#[test]
+fn worktree_list_target_can_be_main_worktree() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("myproj");
+    init_repo(&repo);
+    add_worktree(&repo, "extra1", &temp.path().join("myproj-extra1"));
+
+    let assert = isolated_cmd(temp.path(), None)
+        .current_dir(&repo)
+        .args(["worktree", "list", "main"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    assert_eq!(stdout.trim(), repo.to_string_lossy().trim_end_matches('/'));
+}
+
+#[test]
+fn worktree_list_unknown_target_errors() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("myproj");
+    init_repo(&repo);
+
+    isolated_cmd(temp.path(), None)
+        .current_dir(&repo)
+        .args(["worktree", "list", "nope"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no worktree matches"));
+}
+
+#[test]
 fn worktree_rm_removes_when_no_conflict() {
     let temp = TempDir::new().unwrap();
     let repo = temp.path().join("myproj");

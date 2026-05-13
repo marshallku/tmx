@@ -6,7 +6,7 @@ pub mod worktree_picker;
 
 pub use project_selector::{open_project, run_project_selector};
 pub use session_switcher::run_session_switcher;
-pub use worktree_picker::run_worktree_picker;
+pub use worktree_picker::{run_worktree_picker, run_worktree_picker_stderr};
 
 /// Subsequence-style fuzzy match: every char of `query` must appear in `s`
 /// in order, case-insensitively. Mirrors the Go version's behaviour but is

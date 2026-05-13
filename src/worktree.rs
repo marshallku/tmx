@@ -209,11 +209,29 @@ pub fn sessions_attached_to(worktree: &Path) -> Result<Vec<AttachedSession>> {
 
 /// Find the unique non-main entry matching `target` (exact path or short branch).
 pub fn resolve_target<'a>(entries: &'a [WorktreeEntry], target: &str) -> Result<&'a WorktreeEntry> {
+    resolve_target_inner(entries, target, false)
+}
+
+/// Same matching rules as `resolve_target` but includes the main worktree.
+/// Used by read-only commands like `worktree list` where the main worktree is
+/// a valid target.
+pub fn resolve_target_any<'a>(
+    entries: &'a [WorktreeEntry],
+    target: &str,
+) -> Result<&'a WorktreeEntry> {
+    resolve_target_inner(entries, target, true)
+}
+
+fn resolve_target_inner<'a>(
+    entries: &'a [WorktreeEntry],
+    target: &str,
+    include_main: bool,
+) -> Result<&'a WorktreeEntry> {
     let target_norm = target.trim_end_matches('/');
     let target_canon = PathBuf::from(target).canonicalize().ok();
 
     let mut matches: Vec<&WorktreeEntry> = Vec::new();
-    for e in entries.iter().filter(|e| !e.is_main) {
+    for e in entries.iter().filter(|e| include_main || !e.is_main) {
         let mut hit = false;
 
         let entry_str = e.path.to_string_lossy();
@@ -736,6 +754,18 @@ $3\tempty\t
         let entries = vec![make_entry("/main", Some("refs/heads/main"), true)];
         let err = resolve_target(&entries, "/main").unwrap_err();
         assert!(err.to_string().contains("no worktree matches"));
+    }
+
+    #[test]
+    fn resolve_target_any_includes_main_worktree() {
+        let entries = vec![
+            make_entry("/main", Some("refs/heads/main"), true),
+            make_entry("/wt", Some("refs/heads/feat"), false),
+        ];
+        let by_path = resolve_target_any(&entries, "/main").unwrap();
+        assert_eq!(by_path.path, PathBuf::from("/main"));
+        let by_branch = resolve_target_any(&entries, "main").unwrap();
+        assert_eq!(by_branch.path, PathBuf::from("/main"));
     }
 
     #[test]
