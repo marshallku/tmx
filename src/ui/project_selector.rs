@@ -3,7 +3,11 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::backend::Backend;
+use crossterm::execute;
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
+use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -14,11 +18,24 @@ use crate::project::Project;
 use crate::tmux;
 use crate::ui::{fuzzy_match, theme};
 
+/// RAII guard that restores stderr's terminal state on drop. Matches the
+/// pattern used by `picker::run_picker`.
+struct StderrGuard;
+
+impl Drop for StderrGuard {
+    fn drop(&mut self) {
+        let _ = execute!(io::stderr(), LeaveAlternateScreen);
+        let _ = disable_raw_mode();
+    }
+}
+
 pub fn run_project_selector(projects: Vec<Project>) -> Result<Option<Project>> {
-    let mut terminal = ratatui::init();
-    let result = run_loop(&mut terminal, projects);
-    ratatui::restore();
-    result
+    enable_raw_mode()?;
+    let _guard = StderrGuard;
+    execute!(io::stderr(), EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(io::stderr());
+    let mut terminal = Terminal::new(backend)?;
+    run_loop(&mut terminal, projects)
 }
 
 pub fn open_project(project: &Project) -> Result<()> {

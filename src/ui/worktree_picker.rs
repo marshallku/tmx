@@ -2,7 +2,7 @@ use anyhow::Result;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use crate::ui::picker::{PickerConfig, PickerItem, run_picker, run_picker_stderr};
+use crate::ui::picker::{PickerConfig, PickerItem, run_picker};
 use crate::ui::theme;
 use crate::worktree::{WorktreeEntry, short_branch};
 
@@ -55,21 +55,6 @@ impl PickerItem for WorktreeEntry {
 
 pub fn run_worktree_picker(entries: Vec<WorktreeEntry>) -> Result<Option<WorktreeEntry>> {
     run_picker(
-        entries,
-        PickerConfig {
-            title: "git worktrees",
-            search_placeholder: "Search worktrees...",
-            empty_message: "No removable worktrees",
-            item_noun: "worktrees",
-        },
-    )
-}
-
-/// Worktree picker that renders on **stderr** and yields the selection so the
-/// caller can print just the chosen path on stdout (used by `tmx worktree list`
-/// and the `twt` shell wrapper for cd-on-select).
-pub fn run_worktree_picker_stderr(entries: Vec<WorktreeEntry>) -> Result<Option<WorktreeEntry>> {
-    run_picker_stderr(
         entries,
         PickerConfig {
             title: "git worktrees",

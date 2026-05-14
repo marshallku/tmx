@@ -28,30 +28,8 @@ pub struct PickerConfig<'a> {
     pub item_noun: &'a str,
 }
 
-/// RAII guard so ratatui's terminal is restored even if the loop returns an
-/// error via `?`.
-struct TerminalGuard;
-
-impl TerminalGuard {
-    fn enter() -> ratatui::DefaultTerminal {
-        ratatui::init()
-    }
-}
-
-impl Drop for TerminalGuard {
-    fn drop(&mut self) {
-        ratatui::restore();
-    }
-}
-
-pub fn run_picker<T: PickerItem>(items: Vec<T>, config: PickerConfig<'_>) -> Result<Option<T>> {
-    let _guard = TerminalGuard;
-    let mut terminal = TerminalGuard::enter();
-    run_loop(&mut terminal, items, &config)
-}
-
-/// RAII guard that renders the picker on **stderr** so stdout can be reserved
-/// for the selected path (consumed by shell wrappers like `twt`).
+/// RAII guard that restores stderr's terminal state (raw mode + alternate
+/// screen) even if the loop returns an error or panics partway through setup.
 struct StderrGuard;
 
 impl Drop for StderrGuard {
@@ -61,10 +39,11 @@ impl Drop for StderrGuard {
     }
 }
 
-pub fn run_picker_stderr<T: PickerItem>(
-    items: Vec<T>,
-    config: PickerConfig<'_>,
-) -> Result<Option<T>> {
+/// Run the picker with stderr as the TUI backend. Stdout stays untouched so
+/// callers like `tmx worktree list` can print the selection on stdout for
+/// `$(...)` capture. Also avoids a macOS-specific freeze observed when
+/// rendering to stdout inside a tmux popup.
+pub fn run_picker<T: PickerItem>(items: Vec<T>, config: PickerConfig<'_>) -> Result<Option<T>> {
     enable_raw_mode()?;
     // Install the guard *before* anything that can fail so raw mode is
     // disabled if `EnterAlternateScreen` or terminal construction errors out.

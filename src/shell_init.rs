@@ -28,24 +28,46 @@ twt() {
             command tmx worktree "$@"
             ;;
         *)
-            # Implicit `create <branch>` shorthand: create and cd (or -p print).
-            local print_only=0 args=() a
+            # Implicit `create <branch>` shorthand. Default flow now spawns
+            # and switches to a tmux session inside tmx itself, so the wrapper
+            # only needs to capture stdout when --keep-current (or -p) is set.
+            local print_only=0 keep_current=0 args=() a
             for a in "$@"; do
                 case "$a" in
-                    -p|--print) print_only=1 ;;
+                    -p|--print)
+                        print_only=1
+                        keep_current=1
+                        ;;
+                    --keep-current)
+                        keep_current=1
+                        args+=("$a")
+                        ;;
                     *) args+=("$a") ;;
                 esac
             done
-            local out
-            out=$(command tmx worktree create "${args[@]}")
-            local rc=$?
-            (( rc != 0 )) && return $rc
-            [[ -z "$out" ]] && return 0
-            if (( print_only )); then
-                printf '%s\n' "$out"
+            if (( keep_current )); then
+                # Ensure --keep-current is passed exactly once even if user
+                # supplied only -p.
+                local has_kc=0 a2
+                for a2 in "${args[@]}"; do
+                    [[ "$a2" == "--keep-current" ]] && has_kc=1
+                done
+                (( has_kc )) || args+=("--keep-current")
+                local out
+                out=$(command tmx worktree create "${args[@]}")
+                local rc=$?
+                (( rc != 0 )) && return $rc
+                [[ -z "$out" ]] && return 0
+                if (( print_only )); then
+                    printf '%s\n' "$out"
+                    return 0
+                fi
+                cd "$out"
                 return 0
             fi
-            cd "$out"
+            # Default: tmx creates the worktree and switches into a new tmux
+            # session itself; we don't need to cd.
+            command tmx worktree create "${args[@]}"
             ;;
     esac
 }
@@ -72,6 +94,9 @@ mod tests {
         assert!(out.contains("rm|create|help"));
         // --plain must short-circuit out of the cd path.
         assert!(out.contains("--plain"));
+        // --keep-current opt-out and the bare -p alias must be recognised.
+        assert!(out.contains("--keep-current"));
+        assert!(out.contains("-p|--print"));
     }
 
     #[test]

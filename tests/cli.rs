@@ -211,7 +211,7 @@ fn worktree_creates_sibling_and_prints_path_to_stdout() {
 
     let assert = isolated_cmd(temp.path(), None)
         .current_dir(&repo)
-        .args(["worktree", "create", "feat/x"])
+        .args(["worktree", "create", "feat/x", "--keep-current"])
         .assert()
         .success();
     let output = assert.get_output();
@@ -248,6 +248,43 @@ fn worktree_target_exists_fails() {
 }
 
 #[test]
+fn worktree_create_default_spawns_tmux_session() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("myproj");
+    init_repo(&repo);
+
+    let call_log = temp.path().join("tmux-calls.txt");
+    let script = format!(
+        "#!/usr/bin/env bash
+printf '%s\\n' \"$*\" >> {log}
+case \"$1\" in
+  has-session) exit 1 ;;
+  *) exit 0 ;;
+esac
+",
+        log = call_log.to_string_lossy()
+    );
+    let bin = fake_bin(&temp, "tmux", &script);
+
+    isolated_cmd(temp.path(), Some(&bin))
+        .current_dir(&repo)
+        .args(["worktree", "create", "default-tmux"])
+        .assert()
+        .success();
+
+    let log = std::fs::read_to_string(&call_log).unwrap();
+    assert!(
+        log.contains("new-session"),
+        "expected new-session call, log:\n{log}"
+    );
+    // Either switch-client (inside tmux) or attach-session (outside) was used.
+    assert!(
+        log.contains("switch-client") || log.contains("attach-session"),
+        "expected switch or attach call, log:\n{log}"
+    );
+}
+
+#[test]
 fn worktree_without_subcommand_prints_help_and_exits_nonzero() {
     let temp = TempDir::new().unwrap();
     let repo = temp.path().join("myproj");
@@ -275,7 +312,7 @@ fn worktree_respects_naming_from_config() {
 
     let assert = isolated_cmd(temp.path(), None)
         .current_dir(&repo)
-        .args(["worktree", "create", "feat/x"])
+        .args(["worktree", "create", "feat/x", "--keep-current"])
         .assert()
         .success();
     let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
@@ -322,7 +359,7 @@ fn worktree_runs_post_create_script_when_configured() {
 
     isolated_cmd(temp.path(), None)
         .current_dir(&repo)
-        .args(["worktree", "create", "feat"])
+        .args(["worktree", "create", "feat", "--keep-current"])
         .assert()
         .success()
         .stderr(predicate::str::contains("Ran post-create script"));

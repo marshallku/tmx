@@ -45,7 +45,7 @@ enum Command {
     /// Emit shell integration code (defines the 'twt' wrapper)
     #[command(
         name = "shell-init",
-        long_about = "Emit shell initialization code that defines a 'twt' function\nwrapping 'tmx worktree create' to cd into the new worktree by default.\n\nAdd to your shell rc:\n\n    eval \"$(tmx shell-init zsh)\"\n\nThen:\n\n    twt feat-x           # create worktree and cd into it\n    twt feat-x -p        # create worktree and print path (no cd)\n    twt feat-x --tmux    # create worktree and switch to a new tmux session\n\nSupported shells: zsh."
+        long_about = "Emit shell initialization code that defines a 'twt' function\nrouting to 'tmx worktree …'.\n\nAdd to your shell rc:\n\n    eval \"$(tmx shell-init zsh)\"\n\nThen:\n\n    twt feat-x                 # create worktree + spawn/switch tmux session (default)\n    twt feat-x --keep-current  # create only; cd into the new worktree (no tmux switch)\n    twt feat-x -p              # create only; print path (no cd, no tmux switch)\n    twt rm [target]            # remove a worktree (picker if no target)\n    twt list                   # picker → cd into the selected worktree\n    twt list <target>          # cd into the named worktree (path or short branch)\n    twt list --plain           # dump all worktrees as plain text (no cd)\n\nSupported shells: zsh."
     )]
     ShellInit {
         /// Shell name (currently only 'zsh')
@@ -57,15 +57,16 @@ enum Command {
 enum WorktreeCommand {
     /// Create a sibling git worktree for the current repo
     #[command(
-        long_about = "Create a sibling git worktree, optionally run a post-create script,\nand optionally spawn a tmux session at the new worktree.\n\nWorktree is placed next to the source repo (sibling), named via the\n'worktree.naming' template in ~/.config/tmx/config.toml\n(default: '{repo}-{branch}'). Slashes in branch names are replaced\nwith dashes for the directory name."
+        long_about = "Create a sibling git worktree, optionally run a post-create script,\nand by default spawn a tmux session at the new worktree and switch to it.\n\nWorktree is placed next to the source repo (sibling), named via the\n'worktree.naming' template in ~/.config/tmx/config.toml\n(default: '{repo}-{branch}'). Slashes in branch names are replaced\nwith dashes for the directory name.\n\nWith --keep-current, no tmux session is created and the worktree path is\nprinted on stdout (useful for shell wrappers that cd into the new path)."
     )]
     Create {
         /// New branch to create (also used to derive the directory name)
         branch: String,
 
-        /// Create a tmux session at the new worktree and switch to it
-        #[arg(short = 't', long = "tmux")]
-        tmux: bool,
+        /// Do not spawn / switch to a tmux session for the new worktree;
+        /// just create it and print the path on stdout.
+        #[arg(long = "keep-current")]
+        keep_current: bool,
 
         /// Base ref for the new branch (default: HEAD)
         #[arg(long = "from")]
@@ -108,9 +109,11 @@ pub fn run() -> Result<()> {
         Some(Command::List) => run_list(),
         Some(Command::Switch { session }) => run_switch(session.as_deref()),
         Some(Command::Worktree { command }) => match command {
-            WorktreeCommand::Create { branch, tmux, from } => {
-                run_worktree_create(&branch, tmux, from.as_deref().unwrap_or(""))
-            }
+            WorktreeCommand::Create {
+                branch,
+                keep_current,
+                from,
+            } => run_worktree_create(&branch, keep_current, from.as_deref().unwrap_or("")),
             WorktreeCommand::List { target, plain } => run_worktree_list(target.as_deref(), plain),
             WorktreeCommand::Rm { target, force } => run_worktree_rm(target.as_deref(), force),
         },
@@ -185,7 +188,7 @@ fn run_switch(name: Option<&str>) -> Result<()> {
     tmux::switch_session(&selected.name).context("failed to switch session")
 }
 
-fn run_worktree_create(branch: &str, with_tmux: bool, from: &str) -> Result<()> {
+fn run_worktree_create(branch: &str, keep_current: bool, from: &str) -> Result<()> {
     let cfg = Config::load();
     let res = worktree::create(
         worktree::Options {
@@ -201,18 +204,18 @@ fn run_worktree_create(branch: &str, with_tmux: bool, from: &str) -> Result<()> 
         eprintln!("Ran post-create script: {}", res.script_ran);
     }
 
-    if with_tmux {
-        let session_name = tmux::safe_session_name(&res.repo_name, branch);
-        if !tmux::session_exists(&session_name) {
-            tmux::create_session(&session_name, &res.worktree_path.to_string_lossy())
-                .context("create tmux session")?;
-        }
-        return tmux::switch_session(&session_name).context("switch tmux session");
+    if keep_current {
+        // Print the path on stdout so callers can `cd "$(tmx worktree create … --keep-current)"`.
+        println!("{}", res.worktree_path.display());
+        return Ok(());
     }
 
-    // No --tmux: print the path on stdout so callers can `cd $(tmx worktree create ...)`.
-    println!("{}", res.worktree_path.display());
-    Ok(())
+    let session_name = tmux::safe_session_name(&res.repo_name, branch);
+    if !tmux::session_exists(&session_name) {
+        tmux::create_session(&session_name, &res.worktree_path.to_string_lossy())
+            .context("create tmux session")?;
+    }
+    tmux::switch_session(&session_name).context("switch tmux session")
 }
 
 fn run_worktree_list(target: Option<&str>, plain: bool) -> Result<()> {
@@ -257,7 +260,7 @@ fn run_worktree_list(target: Option<&str>, plain: bool) -> Result<()> {
         return Ok(());
     }
 
-    let Some(selected) = ui::run_worktree_picker_stderr(entries)? else {
+    let Some(selected) = ui::run_worktree_picker(entries)? else {
         return Ok(());
     };
     println!("{}", selected.path.display());
