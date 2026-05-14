@@ -17,3 +17,7 @@ install-path = "CARGO_HOME"
 hosting = "github"
 # Whether to install an updater program
 install-updater = false
+# Publish jobs to run in CI (custom workflow at .github/workflows/publish-crates.yml)
+publish-jobs = ["./publish-crates"]
+# Override default custom-publish permissions (npm-oriented id-token/packages) with what cargo publish needs
+github-custom-job-permissions = { "publish-crates" = { contents = "read" } }
