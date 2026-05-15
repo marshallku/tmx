@@ -9,6 +9,9 @@ build:
 install: build
 	mkdir -p $(INSTALL_DIR)
 	cp target/release/$(BINARY_NAME) $(INSTALL_DIR)/$(BINARY_NAME)
+	@if [ "$$(uname)" = "Darwin" ]; then \
+		codesign --force --sign - "$(INSTALL_DIR)/$(BINARY_NAME)"; \
+	fi
 
 uninstall:
 	rm -f $(INSTALL_DIR)/$(BINARY_NAME)
