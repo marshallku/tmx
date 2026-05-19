@@ -34,6 +34,13 @@ impl ProcSnapshot {
             .with_cwd(UpdateKind::Always)
     }
 
+    /// True if `pid` exists in this snapshot's process table. Used to
+    /// distinguish a freshly-spawned codex worker (alive) from a state
+    /// file whose `pid` field is days old (zombie).
+    pub fn pid_alive(&self, pid: u32) -> bool {
+        self.sys.process(Pid::from_u32(pid)).is_some()
+    }
+
     /// Walk descendants of `root_pid` (BFS) and return the most recently
     /// started one whose exe basename matches any of `targets`.
     pub fn find_descendant(&self, root_pid: u32, targets: &[&str]) -> Option<ProcInfo> {

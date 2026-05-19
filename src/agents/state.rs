@@ -124,6 +124,13 @@ pub struct CodexJob {
     pub workspace_root: PathBuf,
     pub status: String,
     pub started_at_ms: Option<i64>,
+    /// `updatedAt` epoch-millis. Used as a freshness signal: a `running`
+    /// job whose `updatedAt` is hours old is almost certainly a zombie
+    /// (codex-companion crashed without flipping the status).
+    pub updated_at_ms: Option<i64>,
+    /// PID the codex-companion recorded for this job. `None` for jobs
+    /// where the field was absent or null (typical for terminal states).
+    pub pid: Option<u32>,
 }
 
 impl CodexJob {
@@ -149,6 +156,12 @@ impl CodexJob {
     }
 }
 
+/// Heuristic: how long can a job sit in non-terminal status before we
+/// stop trusting the file? Real codex tasks finish in seconds-minutes;
+/// anything past an hour is almost certainly a zombie left by a
+/// codex-companion crash that never wrote the terminal status.
+pub const CODEX_JOB_MAX_AGE_MS: i64 = 3600 * 1000;
+
 #[derive(serde::Deserialize)]
 struct StateFile {
     jobs: Option<Vec<RawJob>>,
@@ -167,6 +180,11 @@ struct RawJob {
     status: String,
     #[serde(rename = "startedAt", default)]
     started_at: String,
+    #[serde(rename = "updatedAt", default)]
+    updated_at: String,
+    /// codex-companion writes either an integer or `null` here.
+    #[serde(default)]
+    pid: Option<u32>,
 }
 
 /// Enumerate currently-active codex-companion jobs across every workspace
@@ -215,6 +233,8 @@ fn read_workspace_jobs(workspace_dir: &Path) -> Vec<CodexJob> {
             workspace_root: PathBuf::from(j.workspace_root),
             status: j.status,
             started_at_ms: parse_iso8601_millis(&j.started_at),
+            updated_at_ms: parse_iso8601_millis(&j.updated_at),
+            pid: j.pid,
         })
         .collect()
 }
@@ -375,6 +395,8 @@ mod tests {
             workspace_root: PathBuf::from("/home/me/dev/tmx"),
             status: "running".into(),
             started_at_ms: Some(0),
+            updated_at_ms: Some(0),
+            pid: None,
         };
         assert_eq!(j.repo_name(), "tmx");
     }
@@ -388,6 +410,8 @@ mod tests {
             workspace_root: PathBuf::new(),
             status: "running".into(),
             started_at_ms: None,
+            updated_at_ms: None,
+            pid: None,
         };
         assert!(base.is_active());
         for s in ["completed", "failed", "cancelled", "canceled"] {
@@ -412,10 +436,14 @@ mod tests {
             "jobs": [
                 {"id": "task-running", "title": "Live", "kindLabel": "rescue",
                  "workspaceRoot": "/home/me/dev/tmx", "status": "running",
-                 "startedAt": "2026-05-19T01:00:00.000Z"},
+                 "startedAt": "2026-05-19T01:00:00.000Z",
+                 "updatedAt": "2026-05-19T01:01:00.000Z",
+                 "pid": 12345},
                 {"id": "task-done", "title": "Old", "kindLabel": "rescue",
                  "workspaceRoot": "/home/me/dev/tmx", "status": "completed",
-                 "startedAt": "2026-05-18T01:00:00.000Z"}
+                 "startedAt": "2026-05-18T01:00:00.000Z",
+                 "updatedAt": "2026-05-18T01:00:01.000Z",
+                 "pid": null}
             ]
         }"#;
         fs::write(ws.join("state.json"), state).unwrap();
@@ -424,6 +452,8 @@ mod tests {
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].id, "task-running");
         assert_eq!(jobs[0].status, "running");
+        assert_eq!(jobs[0].pid, Some(12345));
+        assert!(jobs[0].updated_at_ms.is_some());
     }
 
     #[test]

@@ -28,7 +28,10 @@ pub fn collect(proc: &ProcSnapshot) -> Snapshot {
         Err(e) => (Vec::new(), Some(e.to_string())),
     };
     let markers = state::scan();
-    let codex_jobs = state::codex_jobs();
+    let codex_jobs: Vec<_> = state::codex_jobs()
+        .into_iter()
+        .filter(|j| is_codex_job_alive(j, proc))
+        .collect();
 
     let mut agents: Vec<Agent> = Vec::with_capacity(panes.len() + codex_jobs.len());
     for pane in &panes {
@@ -44,6 +47,33 @@ pub fn collect(proc: &ProcSnapshot) -> Snapshot {
         global_blocked: markers.blocked_count,
         panes_error,
         attention: attention::read_recent(ATTENTION_CUTOFF_SECS),
+    }
+}
+
+/// Drop zombie codex jobs — entries left as `running` by a crashed
+/// codex-companion. A job is real iff:
+///   * its recorded `pid` still exists in the process table, AND
+///   * `updatedAt` is within the freshness window.
+///
+/// The `updatedAt` guard covers the PID-reuse case where a long-dead
+/// codex PID happens to match some other current process.
+fn is_codex_job_alive(job: &CodexJob, proc: &ProcSnapshot) -> bool {
+    let now_ms = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let fresh = job
+        .updated_at_ms
+        .map(|t| (now_ms - t).abs() < state::CODEX_JOB_MAX_AGE_MS)
+        .unwrap_or(false);
+    if !fresh {
+        return false;
+    }
+    match job.pid {
+        Some(pid) => proc.pid_alive(pid),
+        // Recent + null pid is uncommon but plausible during a startup
+        // race; trust the file rather than drop.
+        None => true,
     }
 }
 
@@ -218,5 +248,59 @@ mod tests {
         let markers = state::ClaudeStateMarkers::default();
         let flags = build_flags(None, &markers);
         assert_eq!(flags, Flags::default());
+    }
+
+    fn fake_job(pid: Option<u32>, updated_ago_ms: i64) -> state::CodexJob {
+        let now_ms = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        state::CodexJob {
+            id: "task-x".into(),
+            title: String::new(),
+            kind_label: String::new(),
+            workspace_root: std::path::PathBuf::new(),
+            status: "running".into(),
+            started_at_ms: Some(now_ms - updated_ago_ms),
+            updated_at_ms: Some(now_ms - updated_ago_ms),
+            pid,
+        }
+    }
+
+    #[test]
+    fn is_codex_job_alive_drops_stale() {
+        let proc = ProcSnapshot::new();
+        // Two hours old — well past the 1h freshness window.
+        let stale = fake_job(Some(std::process::id()), 7_200_000);
+        assert!(!is_codex_job_alive(&stale, &proc));
+    }
+
+    #[test]
+    fn is_codex_job_alive_drops_dead_pid() {
+        let proc = ProcSnapshot::new();
+        // Fresh updatedAt, but pid 1 unlikely matches… on Linux pid 1
+        // is init/systemd and is always alive, so use a guaranteed-dead
+        // pid instead. u32::MAX is far above any realistic pid.
+        let fresh_but_dead_pid = fake_job(Some(u32::MAX - 1), 1000);
+        assert!(!is_codex_job_alive(&fresh_but_dead_pid, &proc));
+    }
+
+    #[test]
+    fn is_codex_job_alive_keeps_fresh_with_live_pid() {
+        let proc = ProcSnapshot::new();
+        // Use our own PID — guaranteed live in the snapshot.
+        let me = std::process::id();
+        let live = fake_job(Some(me), 1000);
+        assert!(is_codex_job_alive(&live, &proc));
+    }
+
+    #[test]
+    fn is_codex_job_alive_no_updated_at_drops() {
+        // Without an updatedAt we can't establish freshness; treat as
+        // stale to err on the side of pruning zombies.
+        let proc = ProcSnapshot::new();
+        let mut j = fake_job(Some(std::process::id()), 0);
+        j.updated_at_ms = None;
+        assert!(!is_codex_job_alive(&j, &proc));
     }
 }
