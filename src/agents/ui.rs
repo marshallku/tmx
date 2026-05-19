@@ -53,11 +53,46 @@ pub fn run() -> Result<()> {
         run_loop(&mut terminal)?
         // _guard drops here → alt-screen left, raw mode off.
     };
-    if let Some(Action::Switch(target)) = action {
-        // Surface failures so a misformed target or vanished pane doesn't
-        // silently no-op. The caller (cli::run) propagates the error and
-        // tmx exits non-zero.
-        tmux::switch_to_pane(&target).map_err(|e| anyhow::anyhow!("switch to {target}: {e}"))?;
+    match action {
+        // Surface switch-pane failures so a misformed target or vanished
+        // pane doesn't silently no-op. The caller (cli::run) propagates
+        // the error and tmx exits non-zero.
+        Some(Action::Switch(target)) => {
+            tmux::switch_to_pane(&target).map_err(|e| anyhow::anyhow!("switch to {target}: {e}"))?
+        }
+        Some(Action::OpenAttentionPicker) => run_helper_script(
+            "TMX_ATTENTION_PICKER",
+            ".claude/scripts/attention-picker.sh",
+        )?,
+        Some(Action::JumpLatestAttention) => {
+            run_helper_script("TMX_ATTENTION_JUMP", ".claude/scripts/jump-attention.sh")?
+        }
+        None => {}
+    }
+    Ok(())
+}
+
+/// Resolve the path to one of the attention helper scripts and exec it.
+/// Override is via env var (`TMX_ATTENTION_PICKER` / `TMX_ATTENTION_JUMP`),
+/// default is `$HOME/<relative>`. We surface a clear error rather than
+/// silently no-op so the user notices a misconfigured environment.
+fn run_helper_script(env_var: &str, default_rel: &str) -> Result<()> {
+    let path = std::env::var(env_var).ok().map(std::path::PathBuf::from);
+    let path = match path {
+        Some(p) => p,
+        None => dirs::home_dir()
+            .map(|h| h.join(default_rel))
+            .ok_or_else(|| anyhow::anyhow!("cannot resolve $HOME for {default_rel}"))?,
+    };
+    if !path.exists() {
+        anyhow::bail!(
+            "attention helper not found at {} (set {env_var} to override)",
+            path.display()
+        );
+    }
+    let status = std::process::Command::new("bash").arg(&path).status()?;
+    if !status.success() {
+        anyhow::bail!("{} exited with status {status}", path.display());
     }
     Ok(())
 }
@@ -72,7 +107,12 @@ struct Model {
 }
 
 enum Action {
+    /// `tmux select-pane + switch-client` to a specific pane target.
     Switch(String),
+    /// Hand off to the fzf-based attention picker.
+    OpenAttentionPicker,
+    /// Hand off to the "jump to newest attention" fast-path.
+    JumpLatestAttention,
 }
 
 impl Model {
@@ -97,6 +137,18 @@ impl Model {
             KeyCode::Up | KeyCode::Char('k') => self.move_up(),
             KeyCode::Down | KeyCode::Char('j') => self.move_down(),
             KeyCode::Enter => self.activate_selection(),
+            // Mirror the existing `prefix+a` / `prefix+A` tmux bindings:
+            // lowercase a = jump to newest attention, uppercase A = full
+            // fzf picker over the queue. Both hand off to the bash scripts
+            // after raw mode is torn down.
+            KeyCode::Char('a') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.pending_action = Some(Action::JumpLatestAttention);
+                self.quit = true;
+            }
+            KeyCode::Char('A') => {
+                self.pending_action = Some(Action::OpenAttentionPicker);
+                self.quit = true;
+            }
             _ => {}
         }
     }
@@ -317,7 +369,7 @@ fn render(frame: &mut Frame, model: &Model) {
 
     frame.render_widget(
         Paragraph::new(Span::styled(
-            " j/k nav  enter switch  q quit  prefix+A picker",
+            " j/k nav  enter switch  a jump  A picker  q quit",
             theme::muted_style(),
         )),
         layout[5],
