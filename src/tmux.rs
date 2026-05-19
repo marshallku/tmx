@@ -102,6 +102,46 @@ pub fn switch_session(name: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// Switch the current client to a specific pane (`session:window.pane`).
+/// `switch-client -t session:window.pane` is unreliable across tmux versions
+/// for selecting the window/pane within the session, so we do the dance
+/// explicitly: select-pane first (which carries window selection), then
+/// switch the client. All errors are surfaced.
+pub fn switch_to_pane(target: &str) -> io::Result<()> {
+    let session = target.split(':').next().unwrap_or(target);
+    let status = Command::new("tmux")
+        .args(["select-pane", "-t", target])
+        .status()?;
+    if !status.success() {
+        return Err(io::Error::other(format!(
+            "tmux select-pane -t {target} exited with status {status}"
+        )));
+    }
+    if std::env::var_os("TMUX").is_some() {
+        let status = Command::new("tmux")
+            .args(["switch-client", "-t", session])
+            .status()?;
+        if !status.success() {
+            return Err(io::Error::other(format!(
+                "tmux switch-client -t {session} exited with status {status}"
+            )));
+        }
+    } else {
+        let status = Command::new("tmux")
+            .args(["attach-session", "-t", session])
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()?;
+        if !status.success() {
+            return Err(io::Error::other(format!(
+                "tmux attach-session -t {session} exited with status {status}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub fn kill_session(name: &str) -> io::Result<()> {
     let status = Command::new("tmux")
         .args(["kill-session", "-t", name])

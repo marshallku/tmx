@@ -3,6 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 
+use crate::agents;
 use crate::config::{self, Config};
 use crate::project::{self};
 use crate::shell_init;
@@ -24,6 +25,12 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Show a live dashboard of agents running in tmux panes
+    #[command(
+        long_about = "Open a terminal dashboard listing every tmux pane and any Claude/Codex agent\nrunning inside it, plus codex-companion background jobs. Reads tmux + local\nstate (~/.claude/state/), no daemon required. Works the same in GUI tmux and\nover SSH.\n\nKeys:\n  j/k or ↑/↓   navigate\n  enter        switch tmux client to the selected pane\n  q / esc      quit"
+    )]
+    Agents,
+
     /// Kill all unattached tmux sessions
     Cleanup,
 
@@ -105,6 +112,7 @@ pub fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         None => run_selector(),
+        Some(Command::Agents) => agents::run(),
         Some(Command::Cleanup) => run_cleanup(),
         Some(Command::List) => run_list(),
         Some(Command::Switch { session }) => run_switch(session.as_deref()),

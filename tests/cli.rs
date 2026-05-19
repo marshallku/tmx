@@ -68,7 +68,19 @@ fn help_flag_lists_subcommands() {
         .stdout(predicate::str::contains("list"))
         .stdout(predicate::str::contains("switch"))
         .stdout(predicate::str::contains("worktree"))
-        .stdout(predicate::str::contains("shell-init"));
+        .stdout(predicate::str::contains("shell-init"))
+        .stdout(predicate::str::contains("agents"));
+}
+
+#[test]
+fn agents_help_describes_dashboard() {
+    let temp = TempDir::new().unwrap();
+    isolated_cmd(temp.path(), None)
+        .args(["agents", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("dashboard"))
+        .stdout(predicate::str::contains("Claude/Codex"));
 }
 
 #[test]
