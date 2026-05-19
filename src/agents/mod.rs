@@ -5,6 +5,7 @@
 //! Identity anchor is the tmux pane PID; cwd is for state-marker matching
 //! and display, never for identity. See `state.rs` for the matching logic.
 
+pub mod attention;
 pub mod classify;
 pub mod collector;
 pub mod panes;
@@ -128,6 +129,10 @@ pub struct Snapshot {
     /// Surfaced as a banner so the user doesn't mistake "tmux is broken" for
     /// "nothing is running."
     pub panes_error: Option<String>,
+    /// Cross-tool attention queue (Claude stop / notification / codex turn
+    /// hooks). Newest first. Pre-filtered to the same 1h cutoff
+    /// `attention-picker.sh` uses so the two surfaces agree on what's pending.
+    pub attention: Vec<attention::AttentionEntry>,
 }
 
 impl Snapshot {
@@ -137,6 +142,7 @@ impl Snapshot {
             captured_at: SystemTime::now(),
             global_blocked: 0,
             panes_error: None,
+            attention: Vec::new(),
         }
     }
 }

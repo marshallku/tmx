@@ -6,6 +6,7 @@ use std::time::SystemTime;
 
 use crate::tmux;
 
+use super::attention;
 use super::classify::{self, ClaudeUiState};
 use super::panes::{self, PaneInfo};
 use super::proc::ProcSnapshot;
@@ -14,6 +15,10 @@ use super::state::{self, CodexJob};
 use super::{Agent, AgentKind, Flags, PaneLocator, Snapshot, Status};
 
 const AGENT_TARGETS: &[&str] = &["claude", "codex"];
+
+/// Same 1-hour cutoff `attention-picker.sh` uses. Older entries are
+/// considered stale and never surfaced.
+const ATTENTION_CUTOFF_SECS: i64 = 3600;
 
 /// Collect a fresh snapshot. `proc` may be reused across ticks — call
 /// `refresh()` on it before passing it in.
@@ -38,6 +43,7 @@ pub fn collect(proc: &ProcSnapshot) -> Snapshot {
         captured_at: SystemTime::now(),
         global_blocked: markers.blocked_count,
         panes_error,
+        attention: attention::read_recent(ATTENTION_CUTOFF_SECS),
     }
 }
 

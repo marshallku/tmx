@@ -26,6 +26,7 @@ use ratatui::{Frame, Terminal};
 use crate::tmux;
 use crate::ui::theme;
 
+use super::attention::{self, AttentionEntry};
 use super::collector;
 use super::proc::ProcSnapshot;
 use super::{Agent, AgentKind, Snapshot, Status};
@@ -181,6 +182,13 @@ struct RenderKey {
     blocked: usize,
     panes_error: Option<String>,
     rows: Vec<RenderRow>,
+    /// `(ts, kind, source, tmux_session, body)` per attention entry —
+    /// the visible projection of the queue.
+    attention: Vec<(i64, String, String, String, String)>,
+    /// Coarse minute bucket so relative-age strings (`2m`, `1h`) tick
+    /// over even when no underlying snapshot field changes. Without
+    /// this, an attention entry's age display freezes at first paint.
+    minute_bucket: i64,
 }
 
 #[derive(PartialEq, Eq)]
@@ -210,25 +218,55 @@ impl From<&Model> for RenderKey {
                 extra: a.extra.clone(),
             })
             .collect();
+        let attention = model
+            .snapshot
+            .attention
+            .iter()
+            .map(|a| {
+                (
+                    a.ts,
+                    a.kind.clone(),
+                    a.source.clone(),
+                    a.tmux_session.clone(),
+                    a.body.clone(),
+                )
+            })
+            .collect();
+        let minute_bucket = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| (d.as_secs() / 60) as i64)
+            .unwrap_or(0);
         Self {
             cursor: model.cursor,
             blocked: model.snapshot.global_blocked,
             panes_error: model.snapshot.panes_error.clone(),
             rows,
+            attention,
+            minute_bucket,
         }
     }
 }
 
+const ATTENTION_PANEL_MAX_ROWS: u16 = 8;
+
 fn render(frame: &mut Frame, model: &Model) {
     let area = frame.area();
+    let attention = model.snapshot.attention.as_slice();
+    let attention_height = if attention.is_empty() {
+        0
+    } else {
+        (attention.len() as u16).min(ATTENTION_PANEL_MAX_ROWS) + 1
+    };
+
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(3),
-            Constraint::Length(1),
-            Constraint::Length(1),
+            Constraint::Length(1),                // title
+            Constraint::Length(1),                // banner
+            Constraint::Min(3),                   // agents table
+            Constraint::Length(attention_height), // attention queue (0 = hidden)
+            Constraint::Length(1),                // summary
+            Constraint::Length(1),                // keys
         ])
         .split(area);
 
@@ -267,18 +305,22 @@ fn render(frame: &mut Frame, model: &Model) {
         .block(Block::default());
     frame.render_widget(table, layout[2]);
 
+    if attention_height > 0 {
+        render_attention_panel(frame, layout[3], attention);
+    }
+
     let summary = build_summary(&model.snapshot);
     frame.render_widget(
         Paragraph::new(Span::styled(summary, theme::status_bar_style())),
-        layout[3],
+        layout[4],
     );
 
     frame.render_widget(
         Paragraph::new(Span::styled(
-            " j/k nav  enter switch  q quit",
+            " j/k nav  enter switch  q quit  prefix+A picker",
             theme::muted_style(),
         )),
-        layout[4],
+        layout[5],
     );
 
     // Banner line: prefer surfacing a tmux failure over the bare "empty"
@@ -300,6 +342,70 @@ fn render(frame: &mut Frame, model: &Model) {
     };
     if let Some((text, style)) = banner {
         frame.render_widget(Paragraph::new(Span::styled(text, style)), layout[1]);
+    }
+}
+
+fn render_attention_panel(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    entries: &[AttentionEntry],
+) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let header = Line::from(Span::styled(
+        format!(" attention queue ({} pending)", entries.len()),
+        theme::status_bar_style(),
+    ));
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(entries.len() + 1);
+    lines.push(header);
+    for entry in entries.iter().take(ATTENTION_PANEL_MAX_ROWS as usize) {
+        let age = attention::human_age(entry.ts, now);
+        let session_cell = if entry.tmux_session.is_empty() {
+            "—".to_string()
+        } else {
+            entry.tmux_session.clone()
+        };
+        let kind_label = format!("{}·{}", entry.source, short_kind(&entry.kind));
+        // Body fills remaining columns; truncate to fit width minus the
+        // fixed-width prefix columns.
+        let prefix_width = 4 + 1 + 14 + 1 + 18 + 2; // age + session + kind + padding
+        let body_max = (area.width as usize).saturating_sub(prefix_width);
+        let body = truncate_for_width(&sanitize(&entry.body), body_max);
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {:>4}  ", age), theme::muted_style()),
+            Span::styled(pad(&sanitize(&session_cell), 14), theme::normal_style()),
+            Span::styled(pad(&sanitize(&kind_label), 18), theme::branch_style()),
+            Span::raw("  "),
+            Span::styled(body, theme::normal_style()),
+        ]));
+    }
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// Render an attention-queue `kind` value compactly. Known kinds get
+/// hand-picked short aliases (`notif`/`stop`/`turn`); anything else falls
+/// through so a future `notify-*.sh` hook adding a new kind still surfaces
+/// meaningfully rather than collapsing to a generic placeholder.
+fn short_kind(kind: &str) -> String {
+    match kind {
+        "notification" => "notif".to_string(),
+        "stop" => "stop".to_string(),
+        "codex-turn" => "turn".to_string(),
+        "" => "?".to_string(),
+        other => other.chars().take(8).collect(),
+    }
+}
+
+fn pad(s: &str, width: usize) -> String {
+    let n = s.chars().count();
+    if n >= width {
+        s.chars().take(width).collect()
+    } else {
+        let mut out = s.to_string();
+        out.extend(std::iter::repeat_n(' ', width - n));
+        out
     }
 }
 
@@ -396,10 +502,25 @@ fn build_summary(snap: &Snapshot) -> String {
         .iter()
         .filter(|a| a.status == Status::Background)
         .count();
+    let attention = snap.attention.len();
     format!(
-        " rows: {total} • working: {working} • ready: {ready} • decision: {decisions} • bg: {bg} • blocked: {}",
+        " rows: {total} • working: {working} • ready: {ready} • decision: {decisions} • bg: {bg} • attention: {attention} • blocked: {}",
         snap.global_blocked,
     )
+}
+
+/// Truncate to `max` *char* count, appending `…` when cut.
+fn truncate_for_width(s: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max {
+        return s.to_string();
+    }
+    let mut out: String = chars[..max.saturating_sub(1)].iter().collect();
+    out.push('…');
+    out
 }
 
 /// Strip ANSI/control chars so a hostile path or repo name can't inject
@@ -467,6 +588,7 @@ mod tests {
             captured_at: std::time::SystemTime::now(),
             global_blocked: 2,
             panes_error: None,
+            attention: Vec::new(),
         };
         let s = build_summary(&snap);
         assert!(s.contains("rows: 4"));
@@ -474,6 +596,57 @@ mod tests {
         assert!(s.contains("ready: 1"));
         assert!(s.contains("decision: 1"));
         assert!(s.contains("bg: 1"));
+        assert!(s.contains("attention: 0"));
         assert!(s.contains("blocked: 2"));
+    }
+
+    #[test]
+    fn build_summary_reports_attention_count() {
+        let snap = Snapshot {
+            agents: Vec::new(),
+            captured_at: std::time::SystemTime::now(),
+            global_blocked: 0,
+            panes_error: None,
+            attention: vec![
+                AttentionEntry {
+                    ts: 1,
+                    kind: "stop".into(),
+                    source: "claude".into(),
+                    title: String::new(),
+                    body: "b".into(),
+                    session_id: String::new(),
+                    cwd: PathBuf::new(),
+                    tmux_target: String::new(),
+                    tmux_session: String::new(),
+                },
+                AttentionEntry {
+                    ts: 2,
+                    kind: "notification".into(),
+                    source: "claude".into(),
+                    title: String::new(),
+                    body: "b".into(),
+                    session_id: String::new(),
+                    cwd: PathBuf::new(),
+                    tmux_target: String::new(),
+                    tmux_session: String::new(),
+                },
+            ],
+        };
+        let s = build_summary(&snap);
+        assert!(s.contains("attention: 2"));
+    }
+
+    #[test]
+    fn truncate_for_width_basic() {
+        assert_eq!(truncate_for_width("hello", 10), "hello");
+        assert_eq!(truncate_for_width("hello world", 5), "hell…");
+        assert_eq!(truncate_for_width("a", 0), "");
+    }
+
+    #[test]
+    fn pad_extends_or_truncates() {
+        assert_eq!(pad("abc", 5), "abc  ");
+        assert_eq!(pad("abcdef", 4), "abcd");
+        assert_eq!(pad("", 3), "   ");
     }
 }
