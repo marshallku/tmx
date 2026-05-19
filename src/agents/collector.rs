@@ -4,6 +4,9 @@
 use std::path::Path;
 use std::time::SystemTime;
 
+use crate::tmux;
+
+use super::classify::{self, ClaudeUiState};
 use super::panes::{self, PaneInfo};
 use super::proc::ProcSnapshot;
 use super::state::{self, CodexJob};
@@ -51,16 +54,27 @@ fn build_pane_agent(
         Some(d) => {
             let kind = AgentKind::from_command(&d.name);
             let cwd = d.cwd.clone().unwrap_or_else(|| pane.current_path.clone());
-            (kind, cwd, Status::Running, format!("pid {}", d.pid))
+            // Read the visible pane content and classify. On capture
+            // failure or unrecognised content we default to `Idle` —
+            // mislabelling a parked Claude as `working` is exactly the
+            // bug we're trying to fix here, so erring on the low side
+            // is the right tradeoff.
+            let ui_state = tmux::capture_pane(&pane_target(pane))
+                .map(|s| classify::classify(&s))
+                .unwrap_or(ClaudeUiState::Unknown);
+            let status = match ui_state {
+                ClaudeUiState::AwaitingDecision => Status::AwaitingDecision,
+                ClaudeUiState::Working => Status::Working,
+                ClaudeUiState::Ready => Status::Ready,
+                ClaudeUiState::Unknown => Status::Idle,
+            };
+            (kind, cwd, status, format!("pid {}", d.pid))
         }
         None => {
             let kind = AgentKind::from_command(&pane.current_command);
-            let status = if kind == AgentKind::Shell {
-                Status::Idle
-            } else {
-                Status::Running
-            };
-            (kind, pane.current_path.clone(), status, String::new())
+            // No agent process — the pane is at a plain shell or running
+            // something we don't classify. All of these are idle.
+            (kind, pane.current_path.clone(), Status::Idle, String::new())
         }
     };
 
@@ -96,6 +110,10 @@ fn build_pane_agent(
         flags,
         extra,
     }
+}
+
+fn pane_target(pane: &PaneInfo) -> String {
+    format!("{}:{}.{}", pane.session, pane.window, pane.pane)
 }
 
 fn build_flags(repo_root: Option<&Path>, markers: &state::ClaudeStateMarkers) -> Flags {

@@ -102,6 +102,22 @@ pub fn switch_session(name: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// Capture the visible content of a single tmux pane as plain text.
+/// `target` is the `session:window.pane` form. ANSI escapes are stripped
+/// by tmux (no `-e`), which is what we want for pattern matching.
+pub fn capture_pane(target: &str) -> io::Result<String> {
+    let output = Command::new("tmux")
+        .args(["capture-pane", "-p", "-t", target])
+        .output()?;
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "tmux capture-pane -t {target} failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 /// Switch the current client to a specific pane (`session:window.pane`).
 /// `switch-client -t session:window.pane` is unreliable across tmux versions
 /// for selecting the window/pane within the session, so we do the dance

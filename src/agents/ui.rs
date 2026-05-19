@@ -306,9 +306,13 @@ fn render(frame: &mut Frame, model: &Model) {
 fn build_row(agent: &Agent, is_cursor: bool) -> Row<'static> {
     let cursor_marker = if is_cursor { "▶ " } else { "  " };
     let status_style = match agent.status {
-        Status::Running => Style::default().fg(theme::GREEN),
+        Status::Working => Style::default().fg(theme::GREEN),
+        Status::Ready => Style::default().fg(theme::BLUE),
+        Status::AwaitingDecision => Style::default()
+            .fg(theme::YELLOW)
+            .add_modifier(Modifier::BOLD),
         Status::Idle => theme::muted_style(),
-        Status::Background => Style::default().fg(theme::BLUE),
+        Status::Background => Style::default().fg(theme::PURPLE),
     };
     let status_cell = Line::from(vec![
         Span::raw(cursor_marker),
@@ -372,15 +376,20 @@ fn build_flag_line(agent: &Agent) -> Line<'static> {
 
 fn build_summary(snap: &Snapshot) -> String {
     let total = snap.agents.len();
-    let claude = snap
+    let decisions = snap
         .agents
         .iter()
-        .filter(|a| a.kind == AgentKind::Claude)
+        .filter(|a| a.status == Status::AwaitingDecision)
         .count();
-    let codex = snap
+    let working = snap
         .agents
         .iter()
-        .filter(|a| a.kind == AgentKind::Codex && a.status != Status::Background)
+        .filter(|a| a.status == Status::Working)
+        .count();
+    let ready = snap
+        .agents
+        .iter()
+        .filter(|a| a.status == Status::Ready)
         .count();
     let bg = snap
         .agents
@@ -388,7 +397,7 @@ fn build_summary(snap: &Snapshot) -> String {
         .filter(|a| a.status == Status::Background)
         .count();
     format!(
-        " rows: {total} • claude: {claude} • codex: {codex} • bg: {bg} • blocked: {}",
+        " rows: {total} • working: {working} • ready: {ready} • decision: {decisions} • bg: {bg} • blocked: {}",
         snap.global_blocked,
     )
 }
@@ -447,20 +456,23 @@ mod tests {
     }
 
     #[test]
-    fn build_summary_counts_kinds() {
+    fn build_summary_counts_states() {
         let snap = Snapshot {
             agents: vec![
-                agent(AgentKind::Claude, Status::Running, "a"),
-                agent(AgentKind::Claude, Status::Running, "b"),
-                agent(AgentKind::Codex, Status::Background, "c"),
+                agent(AgentKind::Claude, Status::Working, "a"),
+                agent(AgentKind::Claude, Status::Ready, "b"),
+                agent(AgentKind::Claude, Status::AwaitingDecision, "c"),
+                agent(AgentKind::Codex, Status::Background, "d"),
             ],
             captured_at: std::time::SystemTime::now(),
             global_blocked: 2,
             panes_error: None,
         };
         let s = build_summary(&snap);
-        assert!(s.contains("rows: 3"));
-        assert!(s.contains("claude: 2"));
+        assert!(s.contains("rows: 4"));
+        assert!(s.contains("working: 1"));
+        assert!(s.contains("ready: 1"));
+        assert!(s.contains("decision: 1"));
         assert!(s.contains("bg: 1"));
         assert!(s.contains("blocked: 2"));
     }

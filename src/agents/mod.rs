@@ -5,6 +5,7 @@
 //! Identity anchor is the tmux pane PID; cwd is for state-marker matching
 //! and display, never for identity. See `state.rs` for the matching logic.
 
+pub mod classify;
 pub mod collector;
 pub mod panes;
 pub mod proc;
@@ -72,15 +73,27 @@ impl AgentKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
-    Running,
+    /// Claude/Codex is mid-turn (running tools or composing). No input
+    /// from the user is needed.
+    Working,
+    /// Claude/Codex is parked at the chat prompt. User can type a new
+    /// request whenever.
+    Ready,
+    /// Claude/Codex is blocking on a selection/permission dialog and
+    /// will not progress until the user acts.
+    AwaitingDecision,
+    /// Pane has no recognised Claude/Codex UI (plain shell, nvim, etc.).
     Idle,
+    /// Codex-companion background job (no associated tmux pane).
     Background,
 }
 
 impl Status {
     pub fn glyph(self) -> &'static str {
         match self {
-            Self::Running => "●",
+            Self::Working => "●",
+            Self::Ready => "◐",
+            Self::AwaitingDecision => "⚠",
             Self::Idle => "○",
             Self::Background => "▷",
         }
@@ -88,7 +101,9 @@ impl Status {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Running => "run",
+            Self::Working => "working",
+            Self::Ready => "ready",
+            Self::AwaitingDecision => "decision",
             Self::Idle => "idle",
             Self::Background => "bg",
         }
