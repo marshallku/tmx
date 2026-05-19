@@ -83,12 +83,17 @@ pub struct ProcInfo {
 }
 
 fn exe_basename(proc: &Process) -> Option<&str> {
-    proc.exe()
-        .and_then(|p| p.file_name())
-        .and_then(|n| n.to_str())
-        // Fall back to the process name when exe isn't readable (e.g.
-        // privileged or short-lived). `name()` returns OsStr.
-        .or_else(|| proc.name().to_str())
+    // Prefer the kernel-set comm name (`/proc/<pid>/comm` on Linux,
+    // libproc on macOS): it's what the binary calls itself and is
+    // stable across versions. Falling back to the exe path's basename
+    // is brittle — Claude Code's exe path is the versioned install
+    // directory (`.../versions/2.1.143`), so its file_name comes out
+    // as `2.1.143`, not `claude`.
+    proc.name().to_str().or_else(|| {
+        proc.exe()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+    })
 }
 
 #[cfg(test)]
