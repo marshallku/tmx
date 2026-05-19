@@ -104,6 +104,10 @@ struct Model {
     /// Action requested by the last keypress that the outer loop should
     /// service after raw-mode is torn down (e.g. tmux switch-client).
     pending_action: Option<Action>,
+    /// Short ephemeral note shown in the footer for one redraw — used to
+    /// explain a swallowed keypress (e.g. "no fresh attention to jump").
+    /// Cleared on the next state-changing event.
+    notice: Option<String>,
 }
 
 enum Action {
@@ -122,6 +126,7 @@ impl Model {
             cursor: 0,
             quit: false,
             pending_action: None,
+            notice: None,
         }
     }
 
@@ -129,6 +134,9 @@ impl Model {
         if key.kind != KeyEventKind::Press {
             return;
         }
+        // Any real keypress clears the previous notice; specific arms
+        // re-set it if they have new feedback to surface.
+        self.notice = None;
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => self.quit = true,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -141,9 +149,19 @@ impl Model {
             // lowercase a = jump to newest attention, uppercase A = full
             // fzf picker over the queue. Both hand off to the bash scripts
             // after raw mode is torn down.
+            //
+            // 'a' is guarded against the empty-queue case. Without the
+            // guard, pressing 'a' with no fresh entries would close the
+            // popup with no visible action (the script just exits) —
+            // looks identical to a crash. Better to keep the dashboard
+            // open and tell the user why nothing happened.
             KeyCode::Char('a') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.pending_action = Some(Action::JumpLatestAttention);
-                self.quit = true;
+                if self.snapshot.attention.is_empty() {
+                    self.notice = Some("no fresh attention to jump to".to_string());
+                } else {
+                    self.pending_action = Some(Action::JumpLatestAttention);
+                    self.quit = true;
+                }
             }
             KeyCode::Char('A') => {
                 self.pending_action = Some(Action::OpenAttentionPicker);
@@ -241,6 +259,7 @@ struct RenderKey {
     /// over even when no underlying snapshot field changes. Without
     /// this, an attention entry's age display freezes at first paint.
     minute_bucket: i64,
+    notice: Option<String>,
 }
 
 #[derive(PartialEq, Eq)]
@@ -295,6 +314,7 @@ impl From<&Model> for RenderKey {
             rows,
             attention,
             minute_bucket,
+            notice: model.notice.clone(),
         }
     }
 }
@@ -367,11 +387,20 @@ fn render(frame: &mut Frame, model: &Model) {
         layout[4],
     );
 
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            " j/k nav  enter switch  a jump  A picker  q quit",
+    let (keys_text, keys_style) = match model.notice.as_deref() {
+        Some(msg) => (
+            format!(" ⓘ  {}", sanitize(msg)),
+            Style::default()
+                .fg(theme::YELLOW)
+                .add_modifier(Modifier::BOLD),
+        ),
+        None => (
+            " j/k nav  enter switch  a jump  A picker  q quit".to_string(),
             theme::muted_style(),
-        )),
+        ),
+    };
+    frame.render_widget(
+        Paragraph::new(Span::styled(keys_text, keys_style)),
         layout[5],
     );
 
