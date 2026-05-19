@@ -9,6 +9,7 @@ pub mod classify;
 pub mod collector;
 pub mod panes;
 pub mod proc;
+pub mod session_meta;
 pub mod state;
 pub mod ui;
 

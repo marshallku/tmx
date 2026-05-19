@@ -9,6 +9,7 @@ use crate::tmux;
 use super::classify::{self, ClaudeUiState};
 use super::panes::{self, PaneInfo};
 use super::proc::ProcSnapshot;
+use super::session_meta::{self, SessionStatus};
 use super::state::{self, CodexJob};
 use super::{Agent, AgentKind, Flags, PaneLocator, Snapshot, Status};
 
@@ -54,20 +55,7 @@ fn build_pane_agent(
         Some(d) => {
             let kind = AgentKind::from_command(&d.name);
             let cwd = d.cwd.clone().unwrap_or_else(|| pane.current_path.clone());
-            // Read the visible pane content and classify. On capture
-            // failure or unrecognised content we default to `Idle` —
-            // mislabelling a parked Claude as `working` is exactly the
-            // bug we're trying to fix here, so erring on the low side
-            // is the right tradeoff.
-            let ui_state = tmux::capture_pane(&pane_target(pane))
-                .map(|s| classify::classify(&s))
-                .unwrap_or(ClaudeUiState::Unknown);
-            let status = match ui_state {
-                ClaudeUiState::AwaitingDecision => Status::AwaitingDecision,
-                ClaudeUiState::Working => Status::Working,
-                ClaudeUiState::Ready => Status::Ready,
-                ClaudeUiState::Unknown => Status::Idle,
-            };
+            let status = resolve_status(d.pid, kind, pane);
             (kind, cwd, status, format!("pid {}", d.pid))
         }
         None => {
@@ -114,6 +102,33 @@ fn build_pane_agent(
 
 fn pane_target(pane: &PaneInfo) -> String {
     format!("{}:{}.{}", pane.session, pane.window, pane.pane)
+}
+
+/// Decide the UI status for a Claude/Codex descendant. Primary signal is
+/// Claude's own `~/.claude/sessions/<pid>.json` (efficient + accurate);
+/// pane-capture pattern matching is the fallback for codex sessions and
+/// for cases where Claude's state file is missing / malformed / a
+/// future version has changed the schema.
+fn resolve_status(pid: u32, kind: AgentKind, pane: &PaneInfo) -> Status {
+    if kind == AgentKind::Claude
+        && let Some(meta) = session_meta::read(pid)
+    {
+        return match meta.status {
+            SessionStatus::Busy => Status::Working,
+            SessionStatus::Idle => Status::Ready,
+            SessionStatus::Waiting => Status::AwaitingDecision,
+        };
+    }
+    // Fallback: read what the user sees and classify by pattern.
+    let ui_state = tmux::capture_pane(&pane_target(pane))
+        .map(|s| classify::classify(&s))
+        .unwrap_or(ClaudeUiState::Unknown);
+    match ui_state {
+        ClaudeUiState::AwaitingDecision => Status::AwaitingDecision,
+        ClaudeUiState::Working => Status::Working,
+        ClaudeUiState::Ready => Status::Ready,
+        ClaudeUiState::Unknown => Status::Idle,
+    }
 }
 
 fn build_flags(repo_root: Option<&Path>, markers: &state::ClaudeStateMarkers) -> Flags {
