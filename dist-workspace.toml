@@ -21,3 +21,10 @@ install-updater = false
 publish-jobs = ["./publish-crates"]
 # Override default custom-publish permissions (npm-oriented id-token/packages) with what cargo publish needs
 github-custom-job-permissions = { "publish-crates" = { contents = "read" } }
+
+# Pin macOS build runners to the latest GA images (Tahoe 26).
+#   macos-26       — Apple Silicon (arm64)
+#   macos-26-intel — Intel (x86_64); macos-13 x64 image is being retired.
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-26"
+x86_64-apple-darwin = "macos-26-intel"

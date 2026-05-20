@@ -48,15 +48,8 @@ Prebuilt binaries are produced for:
 Releases are driven by [`cargo-dist`](https://github.com/axodotdev/cargo-dist). To cut a new release:
 
 ```sh
-# bump version in Cargo.toml, commit, then:
-git tag v0.1.0
-git push --tags
+make release VERSION=0.1.3
+git push --follow-tags origin master
 ```
 
-The GitHub Actions `release` workflow builds binaries for every target, publishes them to GitHub Releases, and generates the `tmx-cli-installer.sh` script.
-
-To also publish to crates.io (so `cargo install tmx-cli` and `cargo binstall tmx-cli` work), run once per release after the tag push:
-
-```sh
-cargo publish
-```
+`make release` bumps `Cargo.toml`, syncs `Cargo.lock`, commits, and creates an annotated `vX.Y.Z` tag. Pushing the tag triggers the GitHub Actions `release` workflow, which builds binaries for every target, publishes them to GitHub Releases, generates the `tmx-cli-installer.sh` script, and (via the `publish-crates` job) runs `cargo publish` so `cargo install tmx-cli` and `cargo binstall tmx-cli` pick up the new version.
