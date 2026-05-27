@@ -64,7 +64,7 @@ enum Command {
 enum WorktreeCommand {
     /// Create a sibling git worktree for the current repo
     #[command(
-        long_about = "Create a sibling git worktree, optionally run a post-create script,\nand by default spawn a tmux session at the new worktree and switch to it.\n\nWorktree is placed next to the source repo (sibling), named via the\n'worktree.naming' template in ~/.config/tmx/config.toml\n(default: '{repo}-{branch}'). Slashes in branch names are replaced\nwith dashes for the directory name.\n\nWith --keep-current, no tmux session is created and the worktree path is\nprinted on stdout (useful for shell wrappers that cd into the new path)."
+        long_about = "Create a sibling git worktree, optionally run a post-create command,\nand by default spawn a tmux session at the new worktree and switch to it.\n\nWorktree is placed next to the source repo (sibling), named via the\n'worktree.naming' template in ~/.config/tmx/config.toml\n(default: '{repo}-{branch}'). Slashes in branch names are replaced\nwith dashes for the directory name.\n\nWith --keep-current, no tmux session is created and the worktree path is\nprinted on stdout (useful for shell wrappers that cd into the new path)."
     )]
     Create {
         /// New branch to create (also used to derive the directory name)
@@ -209,7 +209,7 @@ fn run_worktree_create(branch: &str, keep_current: bool, from: &str) -> Result<(
 
     eprintln!("Created worktree: {}", res.worktree_path.display());
     if !res.script_ran.is_empty() {
-        eprintln!("Ran post-create script: {}", res.script_ran);
+        eprintln!("Ran post-create command: {}", res.script_ran);
     }
 
     if keep_current {

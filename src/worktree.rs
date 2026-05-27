@@ -3,10 +3,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
+use serde::Serialize;
 
-use crate::config::{Config, expand_home};
+use crate::config::Config;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WorktreeEntry {
     pub path: PathBuf,
     pub branch: Option<String>,
@@ -343,14 +344,14 @@ pub fn create(opts: Options, cfg: &Config) -> Result<CreateResult> {
         script_ran: String::new(),
     };
 
-    if let Some(script) = cfg
+    if let Some(command) = cfg
         .worktree
         .scripts
         .get(repo_root.to_string_lossy().as_ref())
-        && !script.is_empty()
+        && !command.is_empty()
     {
-        run_post_create(script, &worktree_path).context("post_create script failed")?;
-        result.script_ran = script.clone();
+        run_post_create(command, &worktree_path).context("post_create command failed")?;
+        result.script_ran = command.clone();
     }
 
     Ok(result)
@@ -410,30 +411,21 @@ fn run_git_worktree_add(
     Ok(())
 }
 
-fn run_post_create(script: &str, worktree_path: &Path) -> Result<()> {
-    let resolved = resolve_script_path(script, worktree_path);
+fn run_post_create(command: &str, worktree_path: &Path) -> Result<()> {
     let output = Command::new("bash")
-        .arg(&resolved)
+        .arg("-c")
+        .arg(command)
         .current_dir(worktree_path)
         .env("WORKTREE_PATH", worktree_path)
         .output()
-        .with_context(|| format!("invoking script {}", resolved.display()))?;
+        .with_context(|| format!("invoking post-create command: {command}"))?;
     let mut err = std::io::stderr().lock();
     err.write_all(&output.stdout).ok();
     err.write_all(&output.stderr).ok();
     if !output.status.success() {
-        bail!("post-create script exited with status {}", output.status);
+        bail!("post-create command exited with status {}", output.status);
     }
     Ok(())
-}
-
-pub fn resolve_script_path(script: &str, worktree_path: &Path) -> PathBuf {
-    let expanded = expand_home(script);
-    let expanded_path = PathBuf::from(&expanded);
-    if expanded_path.is_absolute() {
-        return expanded_path;
-    }
-    worktree_path.join(expanded)
 }
 
 #[cfg(test)]
@@ -493,34 +485,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_script_path_absolute_is_kept() {
-        let wt = Path::new("/tmp/worktree");
-        assert_eq!(
-            resolve_script_path("/etc/script.sh", wt),
-            PathBuf::from("/etc/script.sh")
-        );
-    }
-
-    #[test]
-    fn resolve_script_path_relative_resolves_against_worktree() {
-        let wt = Path::new("/tmp/worktree");
-        assert_eq!(
-            resolve_script_path("scripts/setup.sh", wt),
-            PathBuf::from("/tmp/worktree/scripts/setup.sh")
-        );
-    }
-
-    #[test]
-    fn resolve_script_path_tilde_expands() {
-        let wt = Path::new("/tmp/worktree");
-        let home = dirs::home_dir().unwrap();
-        assert_eq!(
-            resolve_script_path("~/scripts/setup.sh", wt),
-            home.join("scripts/setup.sh")
-        );
-    }
-
-    #[test]
     fn create_rejects_empty_branch() {
         let cfg = Config::default();
         let err = create(
@@ -554,7 +518,7 @@ mod tests {
     }
 
     #[test]
-    fn create_makes_worktree_and_runs_script() {
+    fn create_makes_worktree_and_runs_inline_command() {
         if !git_available() {
             return;
         }
@@ -562,26 +526,11 @@ mod tests {
         let repo_root = dir.path().join("source-repo");
         init_repo(&repo_root);
 
-        let script_path = repo_root.join("setup.sh");
         let marker = dir.path().join("ran.txt");
-        std::fs::write(
-            &script_path,
-            format!(
-                "#!/usr/bin/env bash\necho ok > {}\n",
-                marker.to_string_lossy()
-            ),
-        )
-        .unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&script_path, perms).unwrap();
+        let command = format!("echo ok > {}", marker.to_string_lossy());
 
         let mut scripts = HashMap::new();
-        scripts.insert(
-            repo_root.to_string_lossy().into_owned(),
-            script_path.to_string_lossy().into_owned(),
-        );
+        scripts.insert(repo_root.to_string_lossy().into_owned(), command.clone());
         let cfg = Config {
             roots: vec![],
             worktree: crate::config::WorktreeConfig {
@@ -604,8 +553,85 @@ mod tests {
         assert_eq!(res.worktree_path, expected_wt);
         assert!(expected_wt.exists());
         assert_eq!(res.repo_name, "source-repo");
-        assert_eq!(res.script_ran, script_path.to_string_lossy());
+        assert_eq!(res.script_ran, command);
         assert!(marker.exists());
+    }
+
+    #[test]
+    fn create_runs_chained_shell_command() {
+        if !git_available() {
+            return;
+        }
+        let dir = TempDir::new().unwrap();
+        let repo_root = dir.path().join("source-repo");
+        init_repo(&repo_root);
+
+        let marker_a = dir.path().join("a.txt");
+        let marker_b = dir.path().join("b.txt");
+        let command = format!(
+            "echo a > {} && echo b > {}",
+            marker_a.to_string_lossy(),
+            marker_b.to_string_lossy()
+        );
+
+        let mut scripts = HashMap::new();
+        scripts.insert(repo_root.to_string_lossy().into_owned(), command);
+        let cfg = Config {
+            roots: vec![],
+            worktree: crate::config::WorktreeConfig {
+                naming: "{repo}-{branch}".into(),
+                scripts,
+            },
+        };
+
+        create(
+            Options {
+                branch: "feat/chain".into(),
+                start_in: repo_root.to_string_lossy().into_owned(),
+                ..Default::default()
+            },
+            &cfg,
+        )
+        .unwrap();
+
+        assert!(marker_a.exists());
+        assert!(marker_b.exists());
+    }
+
+    #[test]
+    fn create_runs_command_in_worktree_cwd() {
+        if !git_available() {
+            return;
+        }
+        let dir = TempDir::new().unwrap();
+        let repo_root = dir.path().join("source-repo");
+        init_repo(&repo_root);
+
+        // Write to a relative path; success proves cwd is the new worktree.
+        let mut scripts = HashMap::new();
+        scripts.insert(
+            repo_root.to_string_lossy().into_owned(),
+            "echo ok > here.txt".into(),
+        );
+        let cfg = Config {
+            roots: vec![],
+            worktree: crate::config::WorktreeConfig {
+                naming: "{repo}-{branch}".into(),
+                scripts,
+            },
+        };
+
+        let res = create(
+            Options {
+                branch: "feat/cwd".into(),
+                start_in: repo_root.to_string_lossy().into_owned(),
+                ..Default::default()
+            },
+            &cfg,
+        )
+        .unwrap();
+
+        assert!(res.worktree_path.join("here.txt").exists());
     }
 
     #[test]

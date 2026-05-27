@@ -19,9 +19,10 @@ pub struct WorktreeConfig {
     /// Tokens: `{repo}` (source repo name), `{branch}` (branch name, slashes replaced with dashes).
     #[serde(default)]
     pub naming: String,
-    /// Map of source repo path → post-create script. Keys may use `~` for `$HOME`.
-    /// Script paths: relative → resolved against the new worktree directory;
-    /// absolute / `~`-prefixed used as-is.
+    /// Map of source repo path → post-create shell command. Keys may use `~` for `$HOME`.
+    /// The value is passed to `bash -c` with the new worktree as the cwd and
+    /// `WORKTREE_PATH` exported, so it can be an inline command
+    /// (`"mise trust && yarn"`) or a script invocation (`"bash scripts/setup.sh"`).
     #[serde(default)]
     pub scripts: HashMap<String, String>,
 }

@@ -374,7 +374,7 @@ fn worktree_runs_post_create_script_when_configured() {
         .args(["worktree", "create", "feat", "--keep-current"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("Ran post-create script"));
+        .stderr(predicate::str::contains("Ran post-create command"));
 
     assert!(
         marker.exists(),
