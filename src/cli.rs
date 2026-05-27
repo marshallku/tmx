@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -27,15 +28,23 @@ struct Cli {
 enum Command {
     /// Show a live dashboard of agents running in tmux panes
     #[command(
-        long_about = "Open a terminal dashboard listing every tmux pane and any Claude/Codex agent\nrunning inside it, plus codex-companion background jobs. Reads tmux + local\nstate (~/.claude/state/), no daemon required. Works the same in GUI tmux and\nover SSH.\n\nKeys:\n  j/k or ↑/↓   navigate\n  enter        switch tmux client to the selected pane\n  q / esc      quit"
+        long_about = "Open a terminal dashboard listing every tmux pane and any Claude/Codex agent\nrunning inside it, plus codex-companion background jobs. Reads tmux + local\nstate (~/.claude/state/), no daemon required. Works the same in GUI tmux and\nover SSH.\n\nKeys:\n  j/k or ↑/↓   navigate\n  enter        switch tmux client to the selected pane\n  q / esc      quit\n\nWith --json: skip the TUI, emit one snapshot to stdout as JSON and exit.\nUseful for agent-driven consumers (jq, scripts, other LLMs)."
     )]
-    Agents,
+    Agents {
+        /// Emit one snapshot to stdout as JSON instead of opening the TUI.
+        #[arg(long)]
+        json: bool,
+    },
 
     /// Kill all unattached tmux sessions
     Cleanup,
 
     /// List all tmux sessions
-    List,
+    List {
+        /// Emit the session list to stdout as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 
     /// Switch to a tmux session (interactive picker or by name)
     Switch {
@@ -82,15 +91,19 @@ enum WorktreeCommand {
 
     /// List worktrees and print the chosen path on stdout
     #[command(
-        long_about = "Print a worktree path on stdout, intended for shell wrappers (`cd \"$(tmx worktree list)\"`).\n\nWith no target, an interactive picker is shown on stderr (so stdout stays clean for `$(...)` capture).\nWith a target (path or short branch), the resolved path is printed directly.\nWith --plain, all worktrees are dumped as 'path  branch  [flags]' lines on stdout."
+        long_about = "Print a worktree path on stdout, intended for shell wrappers (`cd \"$(tmx worktree list)\"`).\n\nWith no target, an interactive picker is shown on stderr (so stdout stays clean for `$(...)` capture).\nWith a target (path or short branch), the resolved path is printed directly.\nWith --plain, all worktrees are dumped as 'path  branch  [flags]' lines on stdout.\nWith --json, all worktrees (or just the resolved target) are emitted as a JSON array."
     )]
     List {
         /// Worktree path or short branch name. Picker shown if omitted.
         target: Option<String>,
 
         /// Dump all worktrees as plain text instead of running the picker.
-        #[arg(long = "plain")]
+        #[arg(long = "plain", conflicts_with = "json")]
         plain: bool,
+
+        /// Emit worktrees to stdout as a JSON array.
+        #[arg(long)]
+        json: bool,
     },
 
     /// Remove a sibling git worktree (fuzzy picker if no target given)
@@ -112,9 +125,9 @@ pub fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         None => run_selector(),
-        Some(Command::Agents) => agents::run(),
+        Some(Command::Agents { json }) => run_agents(json),
         Some(Command::Cleanup) => run_cleanup(),
-        Some(Command::List) => run_list(),
+        Some(Command::List { json }) => run_list(json),
         Some(Command::Switch { session }) => run_switch(session.as_deref()),
         Some(Command::Worktree { command }) => match command {
             WorktreeCommand::Create {
@@ -122,7 +135,11 @@ pub fn run() -> Result<()> {
                 keep_current,
                 from,
             } => run_worktree_create(&branch, keep_current, from.as_deref().unwrap_or("")),
-            WorktreeCommand::List { target, plain } => run_worktree_list(target.as_deref(), plain),
+            WorktreeCommand::List {
+                target,
+                plain,
+                json,
+            } => run_worktree_list(target.as_deref(), plain, json),
             WorktreeCommand::Rm { target, force } => run_worktree_rm(target.as_deref(), force),
         },
         Some(Command::ShellInit { shell }) => run_shell_init(&shell),
@@ -145,6 +162,20 @@ fn run_selector() -> Result<()> {
     ui::open_project(&project)
 }
 
+fn run_agents(json: bool) -> Result<()> {
+    if json {
+        let mut proc = agents::proc::ProcSnapshot::new();
+        proc.refresh();
+        let snapshot = agents::collector::collect(&proc);
+        let stdout = std::io::stdout();
+        let mut handle = stdout.lock();
+        serde_json::to_writer_pretty(&mut handle, &snapshot).context("serialise snapshot")?;
+        writeln!(handle).ok();
+        return Ok(());
+    }
+    agents::run()
+}
+
 fn run_cleanup() -> Result<()> {
     let killed = tmux::cleanup_sessions().context("cleanup failed")?;
     if killed.is_empty() {
@@ -155,7 +186,18 @@ fn run_cleanup() -> Result<()> {
     Ok(())
 }
 
-fn run_list() -> Result<()> {
+fn run_list(json: bool) -> Result<()> {
+    // In JSON mode we always emit a (possibly empty) array — even when tmux
+    // isn't running. Consumers parse a single shape regardless of state.
+    if json {
+        let sessions = tmux::list_sessions().unwrap_or_default();
+        let stdout = std::io::stdout();
+        let mut handle = stdout.lock();
+        serde_json::to_writer_pretty(&mut handle, &sessions).context("serialise sessions")?;
+        writeln!(handle).ok();
+        return Ok(());
+    }
+
     let sessions = match tmux::list_sessions() {
         Ok(s) => s,
         Err(_) => {
@@ -226,9 +268,25 @@ fn run_worktree_create(branch: &str, keep_current: bool, from: &str) -> Result<(
     tmux::switch_session(&session_name).context("switch tmux session")
 }
 
-fn run_worktree_list(target: Option<&str>, plain: bool) -> Result<()> {
+fn run_worktree_list(target: Option<&str>, plain: bool, json: bool) -> Result<()> {
     let cwd = std::env::current_dir().context("resolve cwd")?;
     let entries = worktree::list_entries(&cwd)?;
+
+    // `--json` always emits a JSON array, even with a target (1-element)
+    // and even when the repo has only its main worktree (single entry).
+    // Consumers can rely on the shape without branching on count.
+    if json {
+        let payload: Vec<&worktree::WorktreeEntry> = if let Some(t) = target {
+            vec![worktree::resolve_target_any(&entries, t)?]
+        } else {
+            entries.iter().collect()
+        };
+        let stdout = std::io::stdout();
+        let mut handle = stdout.lock();
+        serde_json::to_writer_pretty(&mut handle, &payload).context("serialise worktrees")?;
+        writeln!(handle).ok();
+        return Ok(());
+    }
 
     if plain {
         for e in &entries {

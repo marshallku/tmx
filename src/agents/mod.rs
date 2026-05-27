@@ -17,7 +17,9 @@ pub mod ui;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-#[derive(Debug, Clone)]
+use serde::Serialize;
+
+#[derive(Debug, Clone, Serialize)]
 pub struct Agent {
     /// Stable identity used as the cursor anchor across snapshot refreshes.
     /// `pane:<target>` for tmux panes, `codex:<job_id>` for background jobs.
@@ -31,7 +33,7 @@ pub struct Agent {
     pub extra: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PaneLocator {
     pub session: String,
     pub window: u32,
@@ -45,7 +47,8 @@ impl PaneLocator {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum AgentKind {
     Claude,
     Codex,
@@ -73,7 +76,8 @@ impl AgentKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum Status {
     /// Claude/Codex is mid-turn (running tools or composing). No input
     /// from the user is needed.
@@ -112,16 +116,19 @@ impl Status {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Flags {
     pub has_intent: bool,
     pub blocked: bool,
     pub reviewed_fresh: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Snapshot {
     pub agents: Vec<Agent>,
+    /// Capture time as epoch milliseconds — stable across timezones, easy
+    /// to diff between snapshots when consumers poll.
+    #[serde(rename = "captured_at_ms", serialize_with = "serialize_epoch_ms")]
     pub captured_at: SystemTime,
     /// Total blocked sessions in `~/.claude/state/` — not always pane-mappable.
     pub global_blocked: usize,
@@ -133,6 +140,14 @@ pub struct Snapshot {
     /// hooks). Newest first. Pre-filtered to the same 1h cutoff
     /// `attention-picker.sh` uses so the two surfaces agree on what's pending.
     pub attention: Vec<attention::AttentionEntry>,
+}
+
+fn serialize_epoch_ms<S: serde::Serializer>(t: &SystemTime, s: S) -> Result<S::Ok, S::Error> {
+    let ms = t
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    s.serialize_i64(ms)
 }
 
 impl Snapshot {

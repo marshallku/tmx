@@ -1,7 +1,9 @@
 use std::io;
 use std::process::{Command, Stdio};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+use serde::Serialize;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Session {
     pub name: String,
     pub windows: u32,

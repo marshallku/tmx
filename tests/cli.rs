@@ -682,6 +682,143 @@ fn worktree_rm_no_match_errors() {
 }
 
 #[test]
+fn list_json_emits_array_even_when_tmux_missing() {
+    let temp = TempDir::new().unwrap();
+    let bin = fake_bin(&temp, "tmux", "#!/usr/bin/env bash\nexit 1\n");
+    let assert = isolated_cmd(temp.path(), Some(&bin))
+        .args(["list", "--json"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    assert!(value.is_array(), "expected JSON array, got: {stdout}");
+    assert_eq!(value.as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn list_json_serializes_sessions() {
+    let temp = TempDir::new().unwrap();
+    let bin = fake_bin(
+        &temp,
+        "tmux",
+        "#!/usr/bin/env bash\nprintf 'main:3:1\\nside:1:0\\n'\n",
+    );
+    let assert = isolated_cmd(temp.path(), Some(&bin))
+        .args(["list", "--json"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    let arr = value.as_array().expect("array");
+    assert_eq!(arr.len(), 2);
+    assert_eq!(arr[0]["name"], "main");
+    assert_eq!(arr[0]["windows"], 3);
+    assert_eq!(arr[0]["attached"], true);
+    assert_eq!(arr[1]["name"], "side");
+    assert_eq!(arr[1]["attached"], false);
+}
+
+#[test]
+fn worktree_list_json_emits_array() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("myproj");
+    init_repo(&repo);
+    let wt = temp.path().join("myproj-jsn1");
+    add_worktree(&repo, "jsn1", &wt);
+
+    let assert = isolated_cmd(temp.path(), None)
+        .current_dir(&repo)
+        .args(["worktree", "list", "--json"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    let arr = value.as_array().expect("array");
+    assert_eq!(arr.len(), 2);
+    // Main worktree first per git's documented contract.
+    assert_eq!(arr[0]["is_main"], true);
+    assert_eq!(arr[0]["path"], repo.to_string_lossy().as_ref());
+    assert_eq!(arr[1]["is_main"], false);
+    assert_eq!(arr[1]["branch"], "refs/heads/jsn1");
+    assert_eq!(arr[1]["path"], wt.to_string_lossy().as_ref());
+}
+
+#[test]
+fn worktree_list_json_with_target_returns_single_element_array() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("myproj");
+    init_repo(&repo);
+    let wt = temp.path().join("myproj-jsn2");
+    add_worktree(&repo, "jsn2", &wt);
+
+    let assert = isolated_cmd(temp.path(), None)
+        .current_dir(&repo)
+        .args(["worktree", "list", "jsn2", "--json"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    let arr = value.as_array().expect("array");
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["branch"], "refs/heads/jsn2");
+    assert_eq!(arr[0]["is_main"], false);
+}
+
+#[test]
+fn worktree_list_json_and_plain_are_mutually_exclusive() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("myproj");
+    init_repo(&repo);
+    isolated_cmd(temp.path(), None)
+        .current_dir(&repo)
+        .args(["worktree", "list", "--json", "--plain"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used"));
+}
+
+#[test]
+fn agents_json_emits_snapshot_shape() {
+    // tmux list-panes failure → panes_error set, agents empty, but the
+    // JSON envelope must still parse so consumers can branch on the error
+    // field rather than a parse failure.
+    let temp = TempDir::new().unwrap();
+    let bin = fake_bin(&temp, "tmux", "#!/usr/bin/env bash\nexit 1\n");
+    let assert = isolated_cmd(temp.path(), Some(&bin))
+        .args(["agents", "--json"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    assert!(value["agents"].is_array(), "agents field missing");
+    assert!(value["attention"].is_array(), "attention field missing");
+    assert!(
+        value["captured_at_ms"].is_i64(),
+        "captured_at_ms missing or wrong type"
+    );
+    assert!(
+        value["global_blocked"].is_u64() || value["global_blocked"].is_i64(),
+        "global_blocked missing"
+    );
+    // panes_error is populated when tmux fails; the exact text is platform-y
+    // but we expect *some* string.
+    assert!(
+        value["panes_error"].is_string(),
+        "expected panes_error string, got: {stdout}"
+    );
+}
+
+#[test]
+fn agents_help_mentions_json_flag() {
+    let temp = TempDir::new().unwrap();
+    isolated_cmd(temp.path(), None)
+        .args(["agents", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--json"));
+}
+
+#[test]
 fn selector_with_empty_roots_prints_help_message() {
     let temp = TempDir::new().unwrap();
     let cfg_dir = temp.path().join(".config").join("tmx");
