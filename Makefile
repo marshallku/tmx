@@ -8,7 +8,10 @@ build:
 
 install: build
 	mkdir -p $(INSTALL_DIR)
-	cp target/release/$(BINARY_NAME) $(INSTALL_DIR)/$(BINARY_NAME)
+	# install(1) atomically unlinks+rewrites — `cp` fails with "Text file
+	# busy" on Linux when the target binary is already running (another
+	# tmx session open, dashboard in another terminal, etc).
+	install -m 755 target/release/$(BINARY_NAME) $(INSTALL_DIR)/$(BINARY_NAME)
 	@if [ "$$(uname)" = "Darwin" ]; then \
 		codesign --force --sign - "$(INSTALL_DIR)/$(BINARY_NAME)"; \
 	fi
