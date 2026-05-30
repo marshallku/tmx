@@ -319,15 +319,22 @@ impl From<&Model> for RenderKey {
     }
 }
 
-const ATTENTION_PANEL_MAX_ROWS: u16 = 8;
+/// Lower bound on the queue panel — header + ≥3 entry rows so a non-empty
+/// queue never collapses into a single header line on tiny popups.
+const ATTENTION_PANEL_MIN_ROWS: u16 = 4;
 
 fn render(frame: &mut Frame, model: &Model) {
     let area = frame.area();
     let attention = model.snapshot.attention.as_slice();
+    // Let the queue grow up to half the popup so a long agent list can't
+    // push its bottom entries off-screen. Surplus entries beyond what
+    // fits are surfaced via a "+N more" indicator inside the panel.
+    let max_attention_rows = (area.height / 2).max(ATTENTION_PANEL_MIN_ROWS);
     let attention_height = if attention.is_empty() {
         0
     } else {
-        (attention.len() as u16).min(ATTENTION_PANEL_MAX_ROWS) + 1
+        // +1 for the header row.
+        ((attention.len() as u16) + 1).min(max_attention_rows)
     };
 
     let layout = Layout::default()
@@ -439,9 +446,21 @@ fn render_attention_panel(
         format!(" attention queue ({} pending)", entries.len()),
         theme::status_bar_style(),
     ));
-    let mut lines: Vec<Line<'static>> = Vec::with_capacity(entries.len() + 1);
+
+    // Reserve 1 row for the header; if we'd still truncate after that,
+    // reserve another row for the "+N more" hint so the user knows the
+    // queue continues offscreen instead of silently swallowing the tail.
+    let entry_capacity = (area.height as usize).saturating_sub(1);
+    let truncated = entries.len() > entry_capacity;
+    let visible_count = if truncated {
+        entry_capacity.saturating_sub(1)
+    } else {
+        entries.len()
+    };
+
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(visible_count + 2);
     lines.push(header);
-    for entry in entries.iter().take(ATTENTION_PANEL_MAX_ROWS as usize) {
+    for entry in entries.iter().take(visible_count) {
         let age = attention::human_age(entry.ts, now);
         let session_cell = if entry.tmux_session.is_empty() {
             "—".to_string()
@@ -461,6 +480,13 @@ fn render_attention_panel(
             Span::raw("  "),
             Span::styled(body, theme::normal_style()),
         ]));
+    }
+    if truncated {
+        let hidden = entries.len() - visible_count;
+        lines.push(Line::from(Span::styled(
+            format!(" … +{hidden} more — press A for full picker"),
+            theme::muted_style(),
+        )));
     }
     frame.render_widget(Paragraph::new(lines), area);
 }
