@@ -20,7 +20,7 @@ use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph, Row, Table};
+use ratatui::widgets::{Block, HighlightSpacing, Paragraph, Row, Table, TableState};
 use ratatui::{Frame, Terminal};
 
 use crate::tmux;
@@ -108,6 +108,10 @@ struct Model {
     /// explain a swallowed keypress (e.g. "no fresh attention to jump").
     /// Cleared on the next state-changing event.
     notice: Option<String>,
+    /// Drives ratatui's auto-scroll for the agents table — kept in sync
+    /// with `cursor` so the selected row stays visible when the list is
+    /// taller than its rendered area (many open tmux panes).
+    table_state: TableState,
 }
 
 enum Action {
@@ -121,12 +125,17 @@ enum Action {
 
 impl Model {
     fn new(snapshot: Snapshot) -> Self {
+        let mut table_state = TableState::default();
+        if !snapshot.agents.is_empty() {
+            table_state.select(Some(0));
+        }
         Self {
             snapshot,
             cursor: 0,
             quit: false,
             pending_action: None,
             notice: None,
+            table_state,
         }
     }
 
@@ -173,11 +182,21 @@ impl Model {
 
     fn move_up(&mut self) {
         self.cursor = self.cursor.saturating_sub(1);
+        self.sync_selection();
     }
 
     fn move_down(&mut self) {
         if self.cursor + 1 < self.snapshot.agents.len() {
             self.cursor += 1;
+            self.sync_selection();
+        }
+    }
+
+    fn sync_selection(&mut self) {
+        if self.snapshot.agents.is_empty() {
+            self.table_state.select(None);
+        } else {
+            self.table_state.select(Some(self.cursor));
         }
     }
 
@@ -210,6 +229,7 @@ impl Model {
         if self.cursor >= self.snapshot.agents.len() {
             self.cursor = self.snapshot.agents.len().saturating_sub(1);
         }
+        self.sync_selection();
     }
 }
 
@@ -222,7 +242,7 @@ fn run_loop<B: Backend>(terminal: &mut Terminal<B>) -> Result<Option<Action>> {
     while !model.quit {
         let key_now = RenderKey::from(&model);
         if last_rendered.as_ref() != Some(&key_now) {
-            terminal.draw(|frame| render(frame, &model))?;
+            terminal.draw(|frame| render(frame, &mut model))?;
             last_rendered = Some(key_now);
         }
 
@@ -323,7 +343,7 @@ impl From<&Model> for RenderKey {
 /// queue never collapses into a single header line on tiny popups.
 const ATTENTION_PANEL_MIN_ROWS: u16 = 4;
 
-fn render(frame: &mut Frame, model: &Model) {
+fn render(frame: &mut Frame, model: &mut Model) {
     let area = frame.area();
     let attention = model.snapshot.attention.as_slice();
     // Let the queue grow up to half the popup so a long agent list can't
@@ -355,7 +375,7 @@ fn render(frame: &mut Frame, model: &Model) {
     );
 
     let header = Row::new(vec![
-        Span::styled("  STATUS", theme::muted_style()),
+        Span::styled("STATUS", theme::muted_style()),
         Span::styled("KIND", theme::muted_style()),
         Span::styled("SESSION", theme::muted_style()),
         Span::styled("REPO", theme::muted_style()),
@@ -363,12 +383,7 @@ fn render(frame: &mut Frame, model: &Model) {
         Span::styled("INFO", theme::muted_style()),
     ]);
 
-    let rows = model
-        .snapshot
-        .agents
-        .iter()
-        .enumerate()
-        .map(|(i, agent)| build_row(agent, i == model.cursor));
+    let rows = model.snapshot.agents.iter().map(build_row);
 
     let widths = [
         Constraint::Length(10),
@@ -379,10 +394,16 @@ fn render(frame: &mut Frame, model: &Model) {
         Constraint::Min(8),
     ];
 
+    // `TableState` selection drives both the visible highlight and the
+    // auto-scroll offset — ratatui shifts `offset` whenever the selected
+    // row would fall outside the viewport, so j past the bottom scrolls.
     let table = Table::new(rows, widths)
         .header(header)
-        .block(Block::default());
-    frame.render_widget(table, layout[2]);
+        .block(Block::default())
+        .highlight_symbol("▶ ")
+        .highlight_spacing(HighlightSpacing::Always)
+        .row_highlight_style(Style::default().add_modifier(Modifier::BOLD));
+    frame.render_stateful_widget(table, layout[2], &mut model.table_state);
 
     if attention_height > 0 {
         render_attention_panel(frame, layout[3], attention);
@@ -516,8 +537,7 @@ fn pad(s: &str, width: usize) -> String {
     }
 }
 
-fn build_row(agent: &Agent, is_cursor: bool) -> Row<'static> {
-    let cursor_marker = if is_cursor { "▶ " } else { "  " };
+fn build_row(agent: &Agent) -> Row<'static> {
     let status_style = match agent.status {
         Status::Working => Style::default().fg(theme::GREEN),
         Status::Ready => Style::default().fg(theme::BLUE),
@@ -528,7 +548,6 @@ fn build_row(agent: &Agent, is_cursor: bool) -> Row<'static> {
         Status::Background => Style::default().fg(theme::PURPLE),
     };
     let status_cell = Line::from(vec![
-        Span::raw(cursor_marker),
         Span::styled(agent.status.glyph().to_string(), status_style),
         Span::raw(" "),
         Span::styled(agent.status.label().to_string(), theme::muted_style()),
@@ -559,18 +578,14 @@ fn build_row(agent: &Agent, is_cursor: bool) -> Row<'static> {
 
     let info_cell = Line::from(Span::styled(sanitize(&agent.extra), theme::muted_style()));
 
-    let mut row = Row::new(vec![
+    Row::new(vec![
         status_cell,
         kind_cell,
         session_cell,
         repo_cell,
         flags_cell,
         info_cell,
-    ]);
-    if is_cursor {
-        row = row.style(Style::default().add_modifier(Modifier::BOLD));
-    }
-    row
+    ])
 }
 
 fn build_flag_line(agent: &Agent) -> Line<'static> {
