@@ -226,9 +226,25 @@ fn run_switch(name: Option<&str>) -> Result<()> {
 
     let sessions = match tmux::list_sessions() {
         Ok(s) if !s.is_empty() => s,
-        _ => {
+        Ok(_) => {
             println!("No active tmux sessions.");
             return Ok(());
+        }
+        Err(_) => {
+            // No server running. Boot it so tmux-continuum auto-restores the
+            // previously saved environment, then pick from what came back.
+            // Drop the bootstrap session unconditionally — its kill-session
+            // cleanup is best-effort, so filtering here is what guarantees it
+            // never reaches the switcher.
+            tmux::boot_and_restore().context("failed to boot tmux server")?;
+            let mut restored =
+                tmux::list_sessions().context("failed to list sessions after restore")?;
+            restored.retain(|s| s.name != tmux::BOOTSTRAP_SESSION);
+            if restored.is_empty() {
+                println!("No sessions to restore.");
+                return Ok(());
+            }
+            restored
         }
     };
 

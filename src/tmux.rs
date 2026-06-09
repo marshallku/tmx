@@ -1,4 +1,5 @@
 use std::io;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use serde::Serialize;
@@ -102,6 +103,124 @@ pub fn switch_session(name: &str) -> io::Result<()> {
         )));
     }
     Ok(())
+}
+
+/// Name of the throwaway session [`boot_and_restore`] spawns to start the
+/// server. Callers must filter this out of any session list shown to the user,
+/// since kill-session cleanup is best-effort.
+pub const BOOTSTRAP_SESSION: &str = "_tmx_boot";
+
+/// Cold-start helper: when no tmux server is running, launching a throwaway
+/// detached session starts the server, which sources `~/.tmux.conf` and lets
+/// tmux-continuum auto-restore the previously saved environment in the
+/// background. continuum only triggers a restore when the server has just
+/// started (within `@continuum-restore-max-delay`, default 10s), so `tmx`
+/// itself must be what boots the server — otherwise the restore window never
+/// opens. We poll until the restored session count settles, then drop the
+/// bootstrap session so it never shows up in the switcher.
+pub fn boot_and_restore() -> io::Result<()> {
+    let status = Command::new("tmux")
+        .args(["new-session", "-d", "-s", BOOTSTRAP_SESSION])
+        .status()?;
+    if !status.success() {
+        return Err(io::Error::other(format!(
+            "tmux new-session (bootstrap) exited with status {status}"
+        )));
+    }
+
+    // continuum_restore.sh sleeps 1s, then recreates every saved session. Use
+    // the number of sessions in the most recent resurrect save as a
+    // deterministic completion target — wait until that many have come back
+    // (plus our bootstrap), rather than guessing from count stability. The
+    // restore process is independent of the bootstrap session, so the timeout
+    // is only a safety cap, not a hard cutoff of the restore itself.
+    match saved_session_count() {
+        Some(target) => {
+            // `> target` == "all `target` restored sessions plus our bootstrap".
+            for _ in 0..40 {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                if list_sessions().map(|s| s.len()).unwrap_or(0) > target {
+                    break;
+                }
+            }
+        }
+        // No save to count against (e.g. first-ever run): nothing deterministic
+        // to wait for, so just give any in-flight restore a brief moment.
+        None => std::thread::sleep(std::time::Duration::from_millis(1500)),
+    }
+
+    let _ = Command::new("tmux")
+        .args(["kill-session", "-t", BOOTSTRAP_SESSION])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    Ok(())
+}
+
+/// Number of distinct sessions in the most recent tmux-resurrect save, used as
+/// the completion target for a continuum restore. Best-effort: returns `None`
+/// if the save file can't be located or read.
+fn saved_session_count() -> Option<usize> {
+    let last = resurrect_dir()?.join("last");
+    let content = std::fs::read_to_string(last).ok()?;
+    let count = count_saved_sessions(&content);
+    (count > 0).then_some(count)
+}
+
+/// Count distinct session names in a tmux-resurrect save. Sessions are the
+/// field-2 values of `pane`/`window` records; other record types
+/// (`state`, `grouped_session`) are ignored.
+fn count_saved_sessions(content: &str) -> usize {
+    content
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split('\t');
+            match fields.next()? {
+                "pane" | "window" => fields.next(),
+                _ => None,
+            }
+        })
+        .collect::<std::collections::HashSet<&str>>()
+        .len()
+}
+
+/// Resolve the tmux-resurrect save directory, mirroring its `helpers.sh`:
+/// honor `@resurrect-dir`, else legacy `~/.tmux/resurrect` if it exists, else
+/// `$XDG_DATA_HOME/tmux/resurrect` (XDG default `~/.local/share`).
+fn resurrect_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+
+    if let Some(opt) = tmux_global_option("@resurrect-dir") {
+        let expanded = match opt.strip_prefix("~/") {
+            Some(rest) => home.join(rest),
+            None => PathBuf::from(opt),
+        };
+        return Some(expanded);
+    }
+
+    let legacy = home.join(".tmux/resurrect");
+    if legacy.is_dir() {
+        return Some(legacy);
+    }
+
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".local/share"));
+    Some(base.join("tmux/resurrect"))
+}
+
+/// Read a global tmux option (`show-options -gqv`), returning `None` when unset.
+fn tmux_global_option(name: &str) -> Option<String> {
+    let output = Command::new("tmux")
+        .args(["show-options", "-gqv", name])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!value.is_empty()).then_some(value)
 }
 
 /// Capture the visible content of a single tmux pane as plain text.
@@ -287,5 +406,24 @@ mod tests {
     fn safe_session_name_replaces_special_chars() {
         assert_eq!(safe_session_name("my.repo", "feat/x"), "my_repo-feat-x");
         assert_eq!(safe_session_name("plain", "main"), "plain-main");
+    }
+
+    #[test]
+    fn count_saved_sessions_counts_distinct_pane_window_names() {
+        let save = "\
+pane\tbrowser\t0\t1\t:*\t0\ttitle\t:/home/u/browser\t1\tzsh\t:
+pane\tbrowser\t1\t0\t:\t0\ttitle\t:/home/u/browser\t1\tzsh\t:
+window\tdocs\t0\t:*\tlayout
+pane\tdocs\t0\t1\t:*\t0\ttitle\t:/home/u/docs\t1\tzsh\t:
+state\tbrowser\t/home/u/browser
+grouped_session\tfoo\tbar";
+        // browser + docs == 2; state / grouped_session ignored.
+        assert_eq!(count_saved_sessions(save), 2);
+    }
+
+    #[test]
+    fn count_saved_sessions_empty_or_irrelevant() {
+        assert_eq!(count_saved_sessions(""), 0);
+        assert_eq!(count_saved_sessions("state\tx\ty\ngrouped_session\ta\tb"), 0);
     }
 }
