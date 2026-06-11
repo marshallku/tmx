@@ -2,7 +2,7 @@ use anyhow::Result;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use crate::ui::picker::{PickerConfig, PickerItem, run_picker};
+use crate::ui::picker::{PickerConfig, PickerItem, cursor_prefix, run_picker};
 use crate::ui::theme;
 use crate::worktree::{WorktreeEntry, short_branch};
 
@@ -21,14 +21,7 @@ impl PickerItem for WorktreeEntry {
     }
 
     fn render(&self, is_cursor: bool) -> Line<'static> {
-        let (cursor_marker, name_style) = if is_cursor {
-            (
-                Span::styled("▸ ", Style::default().fg(theme::VIOLET)),
-                theme::selected_style(),
-            )
-        } else {
-            (Span::raw("  "), theme::normal_style())
-        };
+        let (cursor_marker, name_style) = cursor_prefix(is_cursor);
 
         let label = match self.branch.as_deref() {
             Some(b) => short_branch(b).to_string(),

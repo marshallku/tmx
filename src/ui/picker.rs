@@ -21,6 +21,20 @@ pub trait PickerItem: Clone {
     fn render(&self, is_cursor: bool) -> Line<'static>;
 }
 
+/// Shared leading marker + name style for picker rows: `▸ ` with the
+/// selected style under the cursor, plain padding otherwise. Every
+/// `PickerItem::render` impl starts a row with this pair.
+pub fn cursor_prefix(is_cursor: bool) -> (Span<'static>, Style) {
+    if is_cursor {
+        (
+            Span::styled("▸ ", Style::default().fg(theme::VIOLET)),
+            theme::selected_style(),
+        )
+    } else {
+        (Span::raw("  "), theme::normal_style())
+    }
+}
+
 pub struct PickerConfig<'a> {
     pub title: &'a str,
     pub search_placeholder: &'a str,
@@ -224,4 +238,96 @@ fn render_list<T: PickerItem>(
         .map(|i| model.items[model.filtered_idx[i]].render(i == model.cursor))
         .collect();
     frame.render_widget(Paragraph::new(lines).block(Block::default()), area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    impl PickerItem for String {
+        fn fuzzy_key(&self) -> &str {
+            self
+        }
+
+        fn render(&self, _is_cursor: bool) -> Line<'static> {
+            Line::from(self.clone())
+        }
+    }
+
+    fn items(names: &[&str]) -> Vec<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn press(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn type_str(model: &mut Model<String>, s: &str) {
+        for c in s.chars() {
+            model.handle_key(press(KeyCode::Char(c)));
+        }
+    }
+
+    #[test]
+    fn refilter_narrows_and_restores() {
+        let mut m = Model::new(items(&["alpha", "beta", "albatross"]));
+        type_str(&mut m, "al");
+        assert_eq!(m.filtered_idx, vec![0, 2]);
+        m.handle_key(press(KeyCode::Backspace));
+        m.handle_key(press(KeyCode::Backspace));
+        assert_eq!(m.filtered_idx, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn cursor_clamps_when_filter_shrinks_list() {
+        let mut m = Model::new(items(&["aa", "ab", "zz"]));
+        m.handle_key(press(KeyCode::Down));
+        m.handle_key(press(KeyCode::Down));
+        assert_eq!(m.cursor, 2);
+        type_str(&mut m, "a");
+        assert_eq!(m.filtered_idx.len(), 2);
+        assert_eq!(m.cursor, 1);
+    }
+
+    #[test]
+    fn cursor_does_not_move_past_bounds() {
+        let mut m = Model::new(items(&["one", "two"]));
+        m.handle_key(press(KeyCode::Up));
+        assert_eq!(m.cursor, 0);
+        m.handle_key(press(KeyCode::Down));
+        m.handle_key(press(KeyCode::Down));
+        m.handle_key(press(KeyCode::Down));
+        assert_eq!(m.cursor, 1);
+    }
+
+    #[test]
+    fn enter_selects_filtered_item_by_original_index() {
+        let mut m = Model::new(items(&["alpha", "beta", "albatross"]));
+        type_str(&mut m, "bat");
+        m.handle_key(press(KeyCode::Enter));
+        assert!(m.quit);
+        assert_eq!(m.selected, Some(2));
+    }
+
+    #[test]
+    fn enter_on_empty_filter_selects_nothing() {
+        let mut m = Model::new(items(&["alpha"]));
+        type_str(&mut m, "zzz");
+        m.handle_key(press(KeyCode::Enter));
+        assert_eq!(m.selected, None);
+        assert!(!m.quit);
+    }
+
+    #[test]
+    fn esc_and_ctrl_c_quit_without_selection() {
+        let mut m = Model::new(items(&["alpha"]));
+        m.handle_key(press(KeyCode::Esc));
+        assert!(m.quit);
+        assert_eq!(m.selected, None);
+
+        let mut m = Model::new(items(&["alpha"]));
+        m.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(m.quit);
+        assert_eq!(m.selected, None);
+    }
 }
