@@ -62,7 +62,7 @@ enum Command {
     /// Emit shell integration code (defines the 'twt' wrapper)
     #[command(
         name = "shell-init",
-        long_about = "Emit shell initialization code that defines a 'twt' function\nrouting to 'tmx worktree …'.\n\nAdd to your shell rc:\n\n    eval \"$(tmx shell-init zsh)\"\n\nThen:\n\n    twt feat-x                 # create worktree + spawn/switch tmux session (default)\n    twt feat-x --keep-current  # create only; cd into the new worktree (no tmux switch)\n    twt feat-x -p              # create only; print path (no cd, no tmux switch)\n    twt rm [target]            # remove a worktree (picker if no target)\n    twt list                   # picker → cd into the selected worktree\n    twt list <target>          # cd into the named worktree (path or short branch)\n    twt list --plain           # dump all worktrees as plain text (no cd)\n\nSupported shells: zsh."
+        long_about = "Emit shell initialization code that defines a 'twt' function\nrouting to 'tmx worktree …'.\n\nAdd to your shell rc:\n\n    eval \"$(tmx shell-init zsh)\"\n\nThen:\n\n    twt feat-x                 # create worktree + spawn/switch tmux session (default)\n    twt feat-x --keep-current  # create only; cd into the new worktree (no tmux switch)\n    twt feat-x -p              # create only; print path (no cd, no tmux switch)\n    twt rm [target]            # remove a worktree (picker if no target)\n    twt rm -d [target]         # remove a worktree and delete its branch\n    twt list                   # picker → cd into the selected worktree\n    twt list <target>          # cd into the named worktree (path or short branch)\n    twt list --plain           # dump all worktrees as plain text (no cd)\n\nSupported shells: zsh."
     )]
     ShellInit {
         /// Shell name (currently only 'zsh')
@@ -109,7 +109,7 @@ enum WorktreeCommand {
 
     /// Remove a sibling git worktree (fuzzy picker if no target given)
     #[command(
-        long_about = "Remove a worktree by exact path or short branch name (e.g. 'feat-x').\nIf no target is provided, an interactive picker is shown.\n\nSafety rules (apply even with --force):\n  - Locked worktrees are refused; run 'git worktree unlock' first.\n  - The worktree containing the current working directory is refused.\n  - The worktree containing the current tmux session is refused.\n\nWithout --force, any tmux session attached to the worktree blocks removal.\nWith --force, attached sessions are killed (by id) and 'git worktree remove --force'\nis used (covers dirty worktrees)."
+        long_about = "Remove a worktree by exact path or short branch name (e.g. 'feat-x').\nIf no target is provided, an interactive picker is shown.\n\nSafety rules (apply even with --force):\n  - Locked worktrees are refused; run 'git worktree unlock' first.\n  - The worktree containing the current working directory is refused.\n  - The worktree containing the current tmux session is refused.\n\nWithout --force, any tmux session attached to the worktree blocks removal.\nWith --force, attached sessions are killed (by id) and 'git worktree remove --force'\nis used (covers dirty worktrees).\n\nWith --delete-branch, the branch checked out in the worktree is deleted after\nremoval ('git branch -d', or '-D' when combined with --force)."
     )]
     Rm {
         /// Worktree path or short branch name. Picker shown if omitted.
@@ -118,6 +118,11 @@ enum WorktreeCommand {
         /// Kill conflicting sessions and pass --force to git.
         #[arg(short = 'f', long = "force")]
         force: bool,
+
+        /// Also delete the worktree's branch after removal
+        /// (-d, or -D with --force).
+        #[arg(short = 'd', long = "delete-branch")]
+        delete_branch: bool,
     },
 }
 
@@ -141,7 +146,11 @@ pub fn run() -> Result<()> {
                 plain,
                 json,
             } => run_worktree_list(target.as_deref(), plain, json),
-            WorktreeCommand::Rm { target, force } => run_worktree_rm(target.as_deref(), force),
+            WorktreeCommand::Rm {
+                target,
+                force,
+                delete_branch,
+            } => run_worktree_rm(target.as_deref(), force, delete_branch),
         },
         Some(Command::ShellInit { shell }) => run_shell_init(&shell),
     }
@@ -371,7 +380,7 @@ fn run_worktree_list(target: Option<&str>, plain: bool, json: bool) -> Result<()
     Ok(())
 }
 
-fn run_worktree_rm(target: Option<&str>, force: bool) -> Result<()> {
+fn run_worktree_rm(target: Option<&str>, force: bool, delete_branch: bool) -> Result<()> {
     deps::require("git")?;
     let cwd = std::env::current_dir().context("resolve cwd")?;
     let entries = worktree::list_entries(&cwd)?;
@@ -392,7 +401,22 @@ fn run_worktree_rm(target: Option<&str>, force: bool) -> Result<()> {
         }
     };
 
-    rm_preflight_and_remove(&entry, force, &cwd)
+    rm_preflight_and_remove(&entry, force, &cwd)?;
+
+    if delete_branch {
+        match entry.branch.as_deref().map(worktree::short_branch) {
+            Some(branch) => {
+                // The worktree is already gone at this point; make that
+                // explicit when only the branch deletion fails.
+                worktree::delete_branch(&cwd, branch, force).with_context(|| {
+                    format!("worktree removed, but deleting branch '{branch}' failed")
+                })?;
+                eprintln!("deleted branch: {branch}");
+            }
+            None => eprintln!("worktree was detached; no branch to delete"),
+        }
+    }
+    Ok(())
 }
 
 fn rm_preflight_and_remove(entry: &worktree::WorktreeEntry, force: bool, cwd: &Path) -> Result<()> {

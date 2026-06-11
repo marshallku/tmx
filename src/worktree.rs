@@ -288,6 +288,31 @@ pub fn remove(worktree_path: &Path, force: bool) -> Result<()> {
     Ok(())
 }
 
+/// Run `git branch -d/-D <branch>` in `repo_dir`. `force` maps to `-D`
+/// (delete even when unmerged), mirroring the `--force` semantics of
+/// `worktree rm`. git's own output is forwarded only on failure — on
+/// success the caller prints a single deterministic message instead of
+/// echoing git's locale-dependent "Deleted branch …" line.
+pub fn delete_branch(repo_dir: &Path, branch: &str, force: bool) -> Result<()> {
+    let flag = if force { "-D" } else { "-d" };
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_dir)
+        .args(["branch", flag, branch])
+        .output()
+        .context("invoking git branch delete")?;
+    if !output.status.success() {
+        let mut err = std::io::stderr().lock();
+        err.write_all(&output.stdout).ok();
+        err.write_all(&output.stderr).ok();
+        bail!(
+            "git branch {flag} {branch} failed (status {})",
+            output.status
+        );
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Options {
     pub branch: String,

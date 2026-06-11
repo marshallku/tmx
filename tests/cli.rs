@@ -487,6 +487,96 @@ fn worktree_rm_removes_when_no_conflict() {
     assert!(!wt.exists());
 }
 
+fn branch_exists(repo: &Path, branch: &str) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["show-ref", "--verify", "--quiet"])
+        .arg(format!("refs/heads/{branch}"))
+        .status()
+        .expect("git show-ref")
+        .success()
+}
+
+#[test]
+fn worktree_rm_delete_branch_removes_branch_too() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("myproj");
+    init_repo(&repo);
+    let wt = temp.path().join("myproj-rmb1");
+    add_worktree(&repo, "rmb1", &wt);
+    let bin = fake_bin(&temp, "tmux", "#!/usr/bin/env bash\nexit 1\n");
+
+    isolated_cmd(temp.path(), Some(&bin))
+        .current_dir(&repo)
+        .args(["worktree", "rm", "--delete-branch", &wt.to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("deleted branch: rmb1"));
+    assert!(!wt.exists());
+    assert!(!branch_exists(&repo, "rmb1"));
+}
+
+#[test]
+fn worktree_rm_delete_branch_refuses_unmerged_without_force() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("myproj");
+    init_repo(&repo);
+    let wt = temp.path().join("myproj-rmb2");
+    add_worktree(&repo, "rmb2", &wt);
+    // Commit on the branch so it is unmerged relative to main.
+    let commit = Command::new("git")
+        .arg("-C")
+        .arg(&wt)
+        .args(["commit", "--allow-empty-message", "--allow-empty", "-m", ""])
+        .status()
+        .expect("git commit");
+    assert!(commit.success());
+    let bin = fake_bin(&temp, "tmux", "#!/usr/bin/env bash\nexit 1\n");
+
+    isolated_cmd(temp.path(), Some(&bin))
+        .current_dir(&repo)
+        .args(["worktree", "rm", "--delete-branch", &wt.to_string_lossy()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("git branch -d rmb2 failed"));
+    // The worktree itself is already gone; only the branch survives.
+    assert!(!wt.exists());
+    assert!(branch_exists(&repo, "rmb2"));
+}
+
+#[test]
+fn worktree_rm_delete_branch_force_deletes_unmerged() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("myproj");
+    init_repo(&repo);
+    let wt = temp.path().join("myproj-rmb3");
+    add_worktree(&repo, "rmb3", &wt);
+    let commit = Command::new("git")
+        .arg("-C")
+        .arg(&wt)
+        .args(["commit", "--allow-empty-message", "--allow-empty", "-m", ""])
+        .status()
+        .expect("git commit");
+    assert!(commit.success());
+    let bin = fake_bin(&temp, "tmux", "#!/usr/bin/env bash\nexit 1\n");
+
+    isolated_cmd(temp.path(), Some(&bin))
+        .current_dir(&repo)
+        .args([
+            "worktree",
+            "rm",
+            "--delete-branch",
+            "--force",
+            &wt.to_string_lossy(),
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("deleted branch: rmb3"));
+    assert!(!wt.exists());
+    assert!(!branch_exists(&repo, "rmb3"));
+}
+
 #[test]
 fn worktree_rm_blocked_by_attached_session_without_force() {
     let temp = TempDir::new().unwrap();
