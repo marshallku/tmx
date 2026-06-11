@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_NAMING: &str = "{repo}-{branch}";
+const DEFAULT_ATTENTION_LIMIT: usize = 20;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -11,6 +12,8 @@ pub struct Config {
     pub roots: Vec<String>,
     #[serde(default)]
     pub worktree: WorktreeConfig,
+    #[serde(default)]
+    pub agents: AgentsConfig,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -27,6 +30,21 @@ pub struct WorktreeConfig {
     pub scripts: HashMap<String, String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentsConfig {
+    /// Maximum number of attention-queue entries the agents dashboard keeps
+    /// and displays. `0` hides the attention panel entirely.
+    pub attention_limit: usize,
+}
+
+impl Default for AgentsConfig {
+    fn default() -> Self {
+        Self {
+            attention_limit: DEFAULT_ATTENTION_LIMIT,
+        }
+    }
+}
+
 impl Config {
     pub fn defaults() -> Self {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
@@ -36,6 +54,7 @@ impl Config {
                 naming: DEFAULT_NAMING.to_string(),
                 scripts: HashMap::new(),
             },
+            agents: AgentsConfig::default(),
         }
     }
 
@@ -92,6 +111,11 @@ impl Config {
                 cfg.worktree.scripts = scripts;
             }
         }
+        if let Some(agents) = partial.agents
+            && let Some(limit) = agents.attention_limit
+        {
+            cfg.agents.attention_limit = limit;
+        }
 
         if cfg.worktree.naming.is_empty() {
             cfg.worktree.naming = DEFAULT_NAMING.to_string();
@@ -113,12 +137,18 @@ impl Config {
 struct PartialConfig {
     roots: Option<Vec<String>>,
     worktree: Option<PartialWorktreeConfig>,
+    agents: Option<PartialAgentsConfig>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 struct PartialWorktreeConfig {
     naming: Option<String>,
     scripts: Option<HashMap<String, String>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PartialAgentsConfig {
+    attention_limit: Option<usize>,
 }
 
 pub fn config_path() -> PathBuf {
@@ -293,6 +323,26 @@ naming = "{repo}_{branch}"
 
         let cfg = Config::load_from(&path);
         assert!(cfg.roots.is_empty());
+    }
+
+    #[test]
+    fn load_from_agents_attention_limit_overrides_default() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[agents]\nattention_limit = 5\n").unwrap();
+        let cfg = Config::load_from(&path);
+        assert_eq!(cfg.agents.attention_limit, 5);
+        // Other sections keep their defaults.
+        assert_eq!(cfg.worktree.naming, DEFAULT_NAMING);
+    }
+
+    #[test]
+    fn load_from_missing_agents_section_uses_default_limit() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "roots = []\n").unwrap();
+        let cfg = Config::load_from(&path);
+        assert_eq!(cfg.agents.attention_limit, DEFAULT_ATTENTION_LIMIT);
     }
 
     #[test]

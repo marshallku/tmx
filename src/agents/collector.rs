@@ -21,8 +21,9 @@ const AGENT_TARGETS: &[&str] = &["claude", "codex"];
 const ATTENTION_CUTOFF_SECS: i64 = 3600;
 
 /// Collect a fresh snapshot. `proc` may be reused across ticks — call
-/// `refresh()` on it before passing it in.
-pub fn collect(proc: &ProcSnapshot) -> Snapshot {
+/// `refresh()` on it before passing it in. `attention_limit` caps the
+/// attention queue (`[agents] attention_limit` in config, newest kept).
+pub fn collect(proc: &ProcSnapshot, attention_limit: usize) -> Snapshot {
     let (panes, panes_error) = match panes::list_panes() {
         Ok(p) => (p, None),
         Err(e) => (Vec::new(), Some(e.to_string())),
@@ -46,7 +47,7 @@ pub fn collect(proc: &ProcSnapshot) -> Snapshot {
         captured_at: SystemTime::now(),
         global_blocked: markers.blocked_count,
         panes_error,
-        attention: attention::read_recent(ATTENTION_CUTOFF_SECS),
+        attention: attention::read_recent(ATTENTION_CUTOFF_SECS, attention_limit),
         codex_jobs,
     }
 }

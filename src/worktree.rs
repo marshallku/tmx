@@ -537,6 +537,7 @@ mod tests {
                 naming: "{repo}-{branch}".into(),
                 scripts,
             },
+            agents: Default::default(),
         };
 
         let res = create(
@@ -582,6 +583,7 @@ mod tests {
                 naming: "{repo}-{branch}".into(),
                 scripts,
             },
+            agents: Default::default(),
         };
 
         create(
@@ -619,6 +621,7 @@ mod tests {
                 naming: "{repo}-{branch}".into(),
                 scripts,
             },
+            agents: Default::default(),
         };
 
         let res = create(

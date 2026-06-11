@@ -65,13 +65,20 @@ pub fn queue_path() -> Option<PathBuf> {
     Some(cache.join("claude-attention/queue.jsonl"))
 }
 
+/// The queue file is append-only and can grow without bound; reading and
+/// parsing all of it on every dashboard tick would scale with its lifetime
+/// size. Only this much of the tail is read — far more than `limit` recent
+/// entries can occupy.
+const TAIL_READ_BYTES: u64 = 256 * 1024;
+
 /// Read the queue, filter to entries with `ts >= now - cutoff_secs`,
-/// return newest first. Missing / unreadable file → empty Vec.
-pub fn read_recent(cutoff_secs: i64) -> Vec<AttentionEntry> {
+/// return newest first, at most `limit` entries. Missing / unreadable
+/// file → empty Vec.
+pub fn read_recent(cutoff_secs: i64, limit: usize) -> Vec<AttentionEntry> {
     let Some(path) = queue_path() else {
         return Vec::new();
     };
-    let Ok(bytes) = fs::read(&path) else {
+    let Some(bytes) = read_tail(&path) else {
         return Vec::new();
     };
     let now = SystemTime::now()
@@ -79,10 +86,44 @@ pub fn read_recent(cutoff_secs: i64) -> Vec<AttentionEntry> {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
     let cutoff = now.saturating_sub(cutoff_secs);
-    parse_recent(&bytes, cutoff)
+    parse_recent(&bytes, cutoff, limit)
 }
 
-pub fn parse_recent(bytes: &[u8], cutoff: i64) -> Vec<AttentionEntry> {
+/// Read at most the last [`TAIL_READ_BYTES`] of complete lines. When the
+/// file is larger than the window, the read starts one byte earlier than
+/// the window and everything through the first newline is dropped: if the
+/// window happens to begin exactly at a line start, that extra byte is the
+/// preceding record's `\n`, so the complete first line survives; otherwise
+/// the dropped prefix is exactly the partial first line.
+fn read_tail(path: &std::path::Path) -> Option<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+    // One byte wider than the nominal window: when the window happens to
+    // begin exactly at a line start, that byte is the preceding record's
+    // `\n`, letting the boundary check below keep the complete first line.
+    let window = TAIL_READ_BYTES + 1;
+    let mut file = fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let start = len.saturating_sub(window);
+    if start > 0 {
+        file.seek(SeekFrom::Start(start)).ok()?;
+    }
+    let mut buf = Vec::with_capacity(len.min(window) as usize);
+    // `take` holds the bound even if the file grows between `metadata()`
+    // and this read (the hooks append concurrently).
+    file.take(window).read_to_end(&mut buf).ok()?;
+    if start > 0 {
+        match buf.iter().position(|b| *b == b'\n') {
+            Some(pos) => {
+                buf.drain(..=pos);
+            }
+            // The whole window is one partial line — nothing usable.
+            None => buf.clear(),
+        }
+    }
+    Some(buf)
+}
+
+pub fn parse_recent(bytes: &[u8], cutoff: i64, limit: usize) -> Vec<AttentionEntry> {
     let mut entries: Vec<AttentionEntry> = bytes
         .split(|b| *b == b'\n')
         .filter(|line| !line.is_empty())
@@ -101,8 +142,10 @@ pub fn parse_recent(bytes: &[u8], cutoff: i64) -> Vec<AttentionEntry> {
         })
         .collect();
     // Newest first — picker shows newest-first via `tac`; we sort
-    // explicitly so the file order doesn't matter.
+    // explicitly so the file order doesn't matter. The limit keeps the
+    // newest entries because it is applied after this sort.
     entries.sort_by_key(|e| std::cmp::Reverse(e.ts));
+    entries.truncate(limit);
     entries
 }
 
@@ -142,11 +185,82 @@ mod tests {
             line(now - 7200, "stop", "stale"),
             line(now - 300, "codex-turn", "also-fresh"),
         );
-        let entries = parse_recent(raw.as_bytes(), cutoff);
+        let entries = parse_recent(raw.as_bytes(), cutoff, usize::MAX);
         assert_eq!(entries.len(), 2);
         // Newest first
         assert_eq!(entries[0].body, "fresh");
         assert_eq!(entries[1].body, "also-fresh");
+    }
+
+    #[test]
+    fn parse_recent_limit_keeps_newest() {
+        let raw = format!(
+            "{}\n{}\n{}\n",
+            line(100, "stop", "oldest"),
+            line(300, "stop", "newest"),
+            line(200, "stop", "middle"),
+        );
+        let entries = parse_recent(raw.as_bytes(), 0, 2);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].body, "newest");
+        assert_eq!(entries[1].body, "middle");
+    }
+
+    #[test]
+    fn parse_recent_limit_zero_hides_all() {
+        let raw = line(100, "stop", "x");
+        assert!(parse_recent(raw.as_bytes(), 0, 0).is_empty());
+    }
+
+    #[test]
+    fn read_tail_small_file_reads_everything() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("queue.jsonl");
+        std::fs::write(&path, "line1\nline2\n").unwrap();
+        assert_eq!(read_tail(&path).unwrap(), b"line1\nline2\n");
+    }
+
+    #[test]
+    fn read_tail_large_file_drops_partial_first_line() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("queue.jsonl");
+        // Pad well past TAIL_READ_BYTES so the read starts mid-line, then
+        // append complete lines that must survive.
+        let mut content = vec![b'x'; (TAIL_READ_BYTES + 1024) as usize];
+        content.extend_from_slice(b"\nkeep1\nkeep2\n");
+        std::fs::write(&path, &content).unwrap();
+        let tail = read_tail(&path).unwrap();
+        // The padding line was entered mid-stream → dropped up to its `\n`.
+        assert_eq!(tail, b"keep1\nkeep2\n");
+    }
+
+    #[test]
+    fn read_tail_window_at_exact_line_boundary_keeps_first_record() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("queue.jsonl");
+        // Lay the file out so the nominal window begins exactly at a line
+        // start: the complete first record must survive, not be dropped as
+        // a "partial" line.
+        let mut tail_block = b"first\n".to_vec();
+        tail_block.extend(vec![b'z'; TAIL_READ_BYTES as usize - tail_block.len() - 6]);
+        tail_block.extend_from_slice(b"\nlast\n");
+        assert_eq!(tail_block.len(), TAIL_READ_BYTES as usize);
+        let mut content = vec![b'x'; 50];
+        content.push(b'\n');
+        content.extend_from_slice(&tail_block);
+        std::fs::write(&path, &content).unwrap();
+        assert_eq!(read_tail(&path).unwrap(), tail_block);
+    }
+
+    #[test]
+    fn read_tail_window_without_newline_yields_nothing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("queue.jsonl");
+        // One giant line larger than the window: everything in the window
+        // is a partial line, so nothing usable remains.
+        let content = vec![b'x'; (TAIL_READ_BYTES + 1024) as usize];
+        std::fs::write(&path, &content).unwrap();
+        assert_eq!(read_tail(&path).unwrap(), Vec::<u8>::new());
     }
 
     #[test]
@@ -157,7 +271,7 @@ not-json
 {\"ts\":200,\"kind\":\"stop\",\"body\":\"ok2\"}
 "
         .to_vec();
-        let entries = parse_recent(&raw, 0);
+        let entries = parse_recent(&raw, 0, usize::MAX);
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].body, "ok2");
         assert_eq!(entries[1].body, "ok");
@@ -165,8 +279,8 @@ not-json
 
     #[test]
     fn parse_recent_empty_returns_empty() {
-        assert!(parse_recent(b"", 0).is_empty());
-        assert!(parse_recent(b"\n\n", 0).is_empty());
+        assert!(parse_recent(b"", 0, usize::MAX).is_empty());
+        assert!(parse_recent(b"\n\n", 0, usize::MAX).is_empty());
     }
 
     #[test]
@@ -176,7 +290,7 @@ not-json
         let raw = br#"{"kind":"stop","body":"no-ts"}
 {"ts":42,"kind":"stop","body":"ok"}
 "#;
-        let entries = parse_recent(raw, 0);
+        let entries = parse_recent(raw, 0, usize::MAX);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].body, "ok");
     }

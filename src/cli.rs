@@ -168,7 +168,7 @@ fn run_agents(json: bool) -> Result<()> {
     if json {
         let mut proc = agents::proc::ProcSnapshot::new();
         proc.refresh();
-        let snapshot = agents::collector::collect(&proc);
+        let snapshot = agents::collector::collect(&proc, Config::load().agents.attention_limit);
         let stdout = std::io::stdout();
         let mut handle = stdout.lock();
         serde_json::to_writer_pretty(&mut handle, &snapshot).context("serialise snapshot")?;

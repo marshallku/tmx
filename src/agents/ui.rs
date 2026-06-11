@@ -23,6 +23,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, HighlightSpacing, Paragraph, Row, Table, TableState};
 use ratatui::{Frame, Terminal};
 
+use crate::config::Config;
 use crate::tmux;
 use crate::ui::theme;
 
@@ -234,8 +235,9 @@ impl Model {
 }
 
 fn run_loop<B: Backend>(terminal: &mut Terminal<B>) -> Result<Option<Action>> {
+    let attention_limit = Config::load().agents.attention_limit;
     let mut proc = ProcSnapshot::new();
-    let mut model = Model::new(collector::collect(&proc));
+    let mut model = Model::new(collector::collect(&proc, attention_limit));
     let mut last_tick = Instant::now();
     let mut last_rendered: Option<RenderKey> = None;
 
@@ -254,7 +256,7 @@ fn run_loop<B: Backend>(terminal: &mut Terminal<B>) -> Result<Option<Action>> {
 
         if last_tick.elapsed() >= TICK {
             proc.refresh();
-            let next = collector::collect(&proc);
+            let next = collector::collect(&proc, attention_limit);
             model.replace_snapshot(next);
             last_tick = Instant::now();
         }
