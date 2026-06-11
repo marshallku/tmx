@@ -26,6 +26,9 @@ pub struct Agent {
     pub id: String,
     pub pane: Option<PaneLocator>,
     pub kind: AgentKind,
+    /// The process name behind this row (agent binary, shell, or whatever
+    /// the pane runs). For `Custom` agents this is the display name.
+    pub command: String,
     pub status: Status,
     pub cwd: PathBuf,
     pub repo_name: String,
@@ -52,12 +55,20 @@ impl PaneLocator {
 pub enum AgentKind {
     Claude,
     Codex,
+    /// A user-configured agent (`[agents] extra_agents` in config). The
+    /// concrete name lives in [`Agent::command`].
+    Custom,
     Shell,
     Other,
 }
 
 impl AgentKind {
-    pub fn from_command(cmd: &str) -> Self {
+    /// Classify a process/command name. `extra_agents` wins over the
+    /// built-in table so users can promote anything to agent status.
+    pub fn from_command(cmd: &str, extra_agents: &[String]) -> Self {
+        if extra_agents.iter().any(|a| a == cmd) {
+            return Self::Custom;
+        }
         match cmd {
             "claude" => Self::Claude,
             "codex" => Self::Codex,
@@ -70,6 +81,7 @@ impl AgentKind {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::Custom => "custom",
             Self::Shell => "shell",
             Self::Other => "other",
         }
@@ -176,6 +188,59 @@ pub fn run() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn from_command_builtin_table() {
+        let none: &[String] = &[];
+        assert_eq!(AgentKind::from_command("claude", none), AgentKind::Claude);
+        assert_eq!(AgentKind::from_command("codex", none), AgentKind::Codex);
+        assert_eq!(AgentKind::from_command("zsh", none), AgentKind::Shell);
+        assert_eq!(AgentKind::from_command("nvim", none), AgentKind::Other);
+    }
+
+    #[test]
+    fn from_command_extra_agents_become_custom() {
+        let extras = vec!["gemini".to_string(), "opencode".to_string()];
+        assert_eq!(
+            AgentKind::from_command("gemini", &extras),
+            AgentKind::Custom
+        );
+        assert_eq!(
+            AgentKind::from_command("opencode", &extras),
+            AgentKind::Custom
+        );
+        // Non-listed names keep their built-in classification.
+        assert_eq!(
+            AgentKind::from_command("claude", &extras),
+            AgentKind::Claude
+        );
+        assert_eq!(AgentKind::from_command("htop", &extras), AgentKind::Other);
+    }
+
+    #[test]
+    fn from_command_extra_agents_override_builtins() {
+        // A user listing a shell as an agent wins over the built-in table.
+        let extras = vec!["zsh".to_string()];
+        assert_eq!(AgentKind::from_command("zsh", &extras), AgentKind::Custom);
+    }
+
+    #[test]
+    fn agent_json_exposes_kind_and_command() {
+        let agent = Agent {
+            id: "pane:s:0.0".into(),
+            pane: None,
+            kind: AgentKind::Custom,
+            command: "gemini".into(),
+            status: Status::Idle,
+            cwd: PathBuf::from("/x"),
+            repo_name: "x".into(),
+            flags: Flags::default(),
+            extra: String::new(),
+        };
+        let json = serde_json::to_value(&agent).unwrap();
+        assert_eq!(json["kind"], "custom");
+        assert_eq!(json["command"], "gemini");
+    }
 
     /// The `--json` contract for machine consumers (copad web-bridge):
     /// `codex_jobs` carries the structured rows with snake_case fields —

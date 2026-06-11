@@ -35,12 +35,17 @@ pub struct AgentsConfig {
     /// Maximum number of attention-queue entries the agents dashboard keeps
     /// and displays. `0` hides the attention panel entirely.
     pub attention_limit: usize,
+    /// Extra agent process names to watch in addition to the built-in
+    /// claude/codex (e.g. `["gemini", "opencode"]`). Matched against the
+    /// process comm name; shown in the dashboard under their own name.
+    pub extra_agents: Vec<String>,
 }
 
 impl Default for AgentsConfig {
     fn default() -> Self {
         Self {
             attention_limit: DEFAULT_ATTENTION_LIMIT,
+            extra_agents: Vec::new(),
         }
     }
 }
@@ -111,10 +116,13 @@ impl Config {
                 cfg.worktree.scripts = scripts;
             }
         }
-        if let Some(agents) = partial.agents
-            && let Some(limit) = agents.attention_limit
-        {
-            cfg.agents.attention_limit = limit;
+        if let Some(agents) = partial.agents {
+            if let Some(limit) = agents.attention_limit {
+                cfg.agents.attention_limit = limit;
+            }
+            if let Some(extra) = agents.extra_agents {
+                cfg.agents.extra_agents = extra;
+            }
         }
 
         if cfg.worktree.naming.is_empty() {
@@ -149,6 +157,7 @@ struct PartialWorktreeConfig {
 #[derive(Debug, Default, Deserialize)]
 struct PartialAgentsConfig {
     attention_limit: Option<usize>,
+    extra_agents: Option<Vec<String>>,
 }
 
 pub fn config_path() -> PathBuf {
@@ -342,6 +351,22 @@ naming = "{repo}_{branch}"
         let path = dir.path().join("config.toml");
         std::fs::write(&path, "roots = []\n").unwrap();
         let cfg = Config::load_from(&path);
+        assert_eq!(cfg.agents.attention_limit, DEFAULT_ATTENTION_LIMIT);
+        assert!(cfg.agents.extra_agents.is_empty());
+    }
+
+    #[test]
+    fn load_from_agents_extra_agents_parses() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[agents]\nextra_agents = [\"gemini\", \"opencode\"]\n",
+        )
+        .unwrap();
+        let cfg = Config::load_from(&path);
+        assert_eq!(cfg.agents.extra_agents, vec!["gemini", "opencode"]);
+        // Sibling key keeps its default when absent.
         assert_eq!(cfg.agents.attention_limit, DEFAULT_ATTENTION_LIMIT);
     }
 

@@ -235,9 +235,9 @@ impl Model {
 }
 
 fn run_loop<B: Backend>(terminal: &mut Terminal<B>) -> Result<Option<Action>> {
-    let attention_limit = Config::load().agents.attention_limit;
+    let agents_cfg = Config::load().agents;
     let mut proc = ProcSnapshot::new();
-    let mut model = Model::new(collector::collect(&proc, attention_limit));
+    let mut model = Model::new(collector::collect(&proc, &agents_cfg));
     let mut last_tick = Instant::now();
     let mut last_rendered: Option<RenderKey> = None;
 
@@ -256,7 +256,7 @@ fn run_loop<B: Backend>(terminal: &mut Terminal<B>) -> Result<Option<Action>> {
 
         if last_tick.elapsed() >= TICK {
             proc.refresh();
-            let next = collector::collect(&proc, attention_limit);
+            let next = collector::collect(&proc, &agents_cfg);
             model.replace_snapshot(next);
             last_tick = Instant::now();
         }
@@ -288,6 +288,7 @@ struct RenderKey {
 struct RenderRow {
     pane_target: Option<String>,
     kind: AgentKind,
+    command: String,
     status: Status,
     repo: String,
     has_intent: bool,
@@ -304,6 +305,7 @@ impl From<&Model> for RenderKey {
             .map(|a| RenderRow {
                 pane_target: a.pane.as_ref().map(|p| p.target()),
                 kind: a.kind,
+                command: a.command.clone(),
                 status: a.status,
                 repo: a.repo_name.clone(),
                 has_intent: a.flags.has_intent,
@@ -558,10 +560,16 @@ fn build_row(agent: &Agent) -> Row<'static> {
     let kind_style = match agent.kind {
         AgentKind::Claude => Style::default().fg(theme::ORANGE),
         AgentKind::Codex => Style::default().fg(theme::BLUE),
+        AgentKind::Custom => Style::default().fg(theme::PURPLE),
         AgentKind::Shell => theme::muted_style(),
         AgentKind::Other => theme::muted_style(),
     };
-    let kind_cell = Line::from(Span::styled(sanitize(agent.kind.label()), kind_style));
+    // Custom agents show their actual name (the enum only says "custom").
+    let kind_label = match agent.kind {
+        AgentKind::Custom => agent.command.as_str(),
+        kind => kind.label(),
+    };
+    let kind_cell = Line::from(Span::styled(sanitize(kind_label), kind_style));
 
     let session_cell = match &agent.pane {
         Some(p) => Line::from(vec![
@@ -673,6 +681,7 @@ mod tests {
                 pane_pid: 1,
             }),
             kind,
+            command: kind.label().to_string(),
             status,
             cwd: PathBuf::from("/x"),
             repo_name: repo.into(),

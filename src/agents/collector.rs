@@ -4,6 +4,7 @@
 use std::path::Path;
 use std::time::SystemTime;
 
+use crate::config::AgentsConfig;
 use crate::tmux;
 
 use super::attention;
@@ -21,9 +22,9 @@ const AGENT_TARGETS: &[&str] = &["claude", "codex"];
 const ATTENTION_CUTOFF_SECS: i64 = 3600;
 
 /// Collect a fresh snapshot. `proc` may be reused across ticks — call
-/// `refresh()` on it before passing it in. `attention_limit` caps the
-/// attention queue (`[agents] attention_limit` in config, newest kept).
-pub fn collect(proc: &ProcSnapshot, attention_limit: usize) -> Snapshot {
+/// `refresh()` on it before passing it in. `cfg` carries the dashboard
+/// knobs from `[agents]` in config (attention cap, extra agent names).
+pub fn collect(proc: &ProcSnapshot, cfg: &AgentsConfig) -> Snapshot {
     let (panes, panes_error) = match panes::list_panes() {
         Ok(p) => (p, None),
         Err(e) => (Vec::new(), Some(e.to_string())),
@@ -34,9 +35,12 @@ pub fn collect(proc: &ProcSnapshot, attention_limit: usize) -> Snapshot {
         .filter(|j| is_codex_job_alive(j, proc))
         .collect();
 
+    let mut targets: Vec<&str> = AGENT_TARGETS.to_vec();
+    targets.extend(cfg.extra_agents.iter().map(String::as_str));
+
     let mut agents: Vec<Agent> = Vec::with_capacity(panes.len() + codex_jobs.len());
     for pane in &panes {
-        agents.push(build_pane_agent(pane, proc, &markers));
+        agents.push(build_pane_agent(pane, proc, &markers, &targets, cfg));
     }
     for job in &codex_jobs {
         agents.push(build_codex_job(job));
@@ -47,7 +51,7 @@ pub fn collect(proc: &ProcSnapshot, attention_limit: usize) -> Snapshot {
         captured_at: SystemTime::now(),
         global_blocked: markers.blocked_count,
         panes_error,
-        attention: attention::read_recent(ATTENTION_CUTOFF_SECS, attention_limit),
+        attention: attention::read_recent(ATTENTION_CUTOFF_SECS, cfg.attention_limit),
         codex_jobs,
     }
 }
@@ -83,27 +87,30 @@ fn build_pane_agent(
     pane: &PaneInfo,
     proc: &ProcSnapshot,
     markers: &state::ClaudeStateMarkers,
+    targets: &[&str],
+    cfg: &AgentsConfig,
 ) -> Agent {
-    // Prefer the deepest claude/codex descendant for cwd + identity. Fall
-    // back to the pane's own current_command + current_path when no agent
-    // process is found (idle shell, nvim, etc).
-    let descendant = proc.find_descendant(pane.pane_pid, AGENT_TARGETS);
+    // Prefer the deepest agent descendant for cwd + identity. Fall back to
+    // the pane's own current_command + current_path when no agent process
+    // is found (idle shell, nvim, etc).
+    let descendant = proc.find_descendant(pane.pane_pid, targets);
 
-    let (kind, cwd_for_state, status, extra) = match &descendant {
+    let (kind, command, cwd_for_state, status, extra) = match &descendant {
         Some(d) => {
-            let kind = AgentKind::from_command(&d.name);
+            let kind = AgentKind::from_command(&d.name, &cfg.extra_agents);
             let cwd = d.cwd.clone().unwrap_or_else(|| pane.current_path.clone());
             let status = resolve_status(d.pid, kind, pane);
-            (kind, cwd, status, format!("pid {}", d.pid))
+            (kind, d.name.clone(), cwd, status, format!("pid {}", d.pid))
         }
         None => {
-            let kind = AgentKind::from_command(&pane.current_command);
+            let kind = AgentKind::from_command(&pane.current_command, &cfg.extra_agents);
             // No agent process — the pane is at a plain shell or running
             // something we don't classify. All of these are idle. Surface
             // the actual foreground command so a `shell`/`other` row still
             // tells the user what is running there.
             (
                 kind,
+                pane.current_command.clone(),
                 pane.current_path.clone(),
                 Status::Idle,
                 pane.current_command.clone(),
@@ -137,6 +144,7 @@ fn build_pane_agent(
         id: format!("pane:{}", locator.target()),
         pane: Some(locator),
         kind,
+        command,
         status,
         cwd: cwd_for_state,
         repo_name,
@@ -199,6 +207,7 @@ fn build_codex_job(job: &CodexJob) -> Agent {
         id: format!("codex:{}", job.id),
         pane: None,
         kind: AgentKind::Codex,
+        command: "codex".to_string(),
         status: Status::Background,
         cwd: job.workspace_root.clone(),
         repo_name: job.repo_name(),
