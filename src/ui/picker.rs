@@ -27,7 +27,7 @@ pub trait PickerItem: Clone {
 pub fn cursor_prefix(is_cursor: bool) -> (Span<'static>, Style) {
     if is_cursor {
         (
-            Span::styled("▸ ", Style::default().fg(theme::VIOLET)),
+            Span::styled("▸ ", Style::default().fg(theme::palette().violet)),
             theme::selected_style(),
         )
     } else {
@@ -188,8 +188,11 @@ fn render<T: PickerItem>(frame: &mut Frame, model: &Model<T>, config: &PickerCon
 
     let search_line = Line::from(vec![
         Span::raw("  "),
-        Span::styled("> ", Style::default().fg(theme::VIOLET)),
-        Span::styled(model.search.clone(), Style::default().fg(theme::TEXT)),
+        Span::styled("> ", Style::default().fg(theme::palette().violet)),
+        Span::styled(
+            model.search.clone(),
+            Style::default().fg(theme::palette().text),
+        ),
         Span::styled(
             if model.search.is_empty() {
                 config.search_placeholder.to_string()

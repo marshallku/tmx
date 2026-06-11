@@ -563,6 +563,7 @@ mod tests {
                 scripts,
             },
             agents: Default::default(),
+            theme: Default::default(),
         };
 
         let res = create(
@@ -609,6 +610,7 @@ mod tests {
                 scripts,
             },
             agents: Default::default(),
+            theme: Default::default(),
         };
 
         create(
@@ -647,6 +649,7 @@ mod tests {
                 scripts,
             },
             agents: Default::default(),
+            theme: Default::default(),
         };
 
         let res = create(

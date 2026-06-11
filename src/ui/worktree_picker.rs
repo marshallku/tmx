@@ -36,7 +36,7 @@ impl PickerItem for WorktreeEntry {
         if self.locked {
             spans.push(Span::styled(
                 " [locked]",
-                Style::default().fg(theme::VIOLET),
+                Style::default().fg(theme::palette().violet),
             ));
         }
         if self.prunable {

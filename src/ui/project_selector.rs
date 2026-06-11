@@ -33,13 +33,13 @@ impl PickerItem for Project {
         if self.git_ahead > 0 {
             spans.push(Span::styled(
                 format!(" ↑{}", self.git_ahead),
-                Style::default().fg(theme::GREEN),
+                Style::default().fg(theme::palette().green),
             ));
         }
         if self.git_behind > 0 {
             spans.push(Span::styled(
                 format!(" ↓{}", self.git_behind),
-                Style::default().fg(theme::RED),
+                Style::default().fg(theme::palette().red),
             ));
         }
 

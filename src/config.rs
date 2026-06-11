@@ -14,6 +14,10 @@ pub struct Config {
     pub worktree: WorktreeConfig,
     #[serde(default)]
     pub agents: AgentsConfig,
+    /// `[theme]` color overrides (`violet = "#cba6f7"` …). Validated and
+    /// applied by `ui::theme::init`; unknown keys / bad values warn there.
+    #[serde(default)]
+    pub theme: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -60,6 +64,7 @@ impl Config {
                 scripts: HashMap::new(),
             },
             agents: AgentsConfig::default(),
+            theme: HashMap::new(),
         }
     }
 
@@ -70,7 +75,10 @@ impl Config {
     pub fn load_from(path: &Path) -> Self {
         let (cfg, warning) = Self::load_from_with_warning(path);
         if let Some(warning) = warning {
-            eprintln!("tmx: warning: {warning}");
+            // Several commands load the config more than once per process;
+            // a broken file should nag once, not per load.
+            static WARN_ONCE: std::sync::Once = std::sync::Once::new();
+            WARN_ONCE.call_once(|| eprintln!("tmx: warning: {warning}"));
         }
         cfg
     }
@@ -124,6 +132,9 @@ impl Config {
                 cfg.agents.extra_agents = extra;
             }
         }
+        if let Some(theme) = partial.theme {
+            cfg.theme = theme;
+        }
 
         if cfg.worktree.naming.is_empty() {
             cfg.worktree.naming = DEFAULT_NAMING.to_string();
@@ -146,6 +157,7 @@ struct PartialConfig {
     roots: Option<Vec<String>>,
     worktree: Option<PartialWorktreeConfig>,
     agents: Option<PartialAgentsConfig>,
+    theme: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -368,6 +380,25 @@ naming = "{repo}_{branch}"
         assert_eq!(cfg.agents.extra_agents, vec!["gemini", "opencode"]);
         // Sibling key keeps its default when absent.
         assert_eq!(cfg.agents.attention_limit, DEFAULT_ATTENTION_LIMIT);
+    }
+
+    #[test]
+    fn load_from_theme_section_parses_as_map() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[theme]\nviolet = \"#112233\"\ntext = \"#445566\"\n").unwrap();
+        let cfg = Config::load_from(&path);
+        assert_eq!(cfg.theme.get("violet").map(String::as_str), Some("#112233"));
+        assert_eq!(cfg.theme.get("text").map(String::as_str), Some("#445566"));
+    }
+
+    #[test]
+    fn load_from_missing_theme_section_is_empty() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "roots = []\n").unwrap();
+        let cfg = Config::load_from(&path);
+        assert!(cfg.theme.is_empty());
     }
 
     #[test]

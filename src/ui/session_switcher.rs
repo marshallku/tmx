@@ -20,7 +20,10 @@ impl PickerItem for Session {
             Span::styled(format!(" {} window(s)", self.windows), theme::muted_style()),
         ];
         if self.attached {
-            spans.push(Span::styled(" ●", Style::default().fg(theme::GREEN)));
+            spans.push(Span::styled(
+                " ●",
+                Style::default().fg(theme::palette().green),
+            ));
         }
         Line::from(spans)
     }

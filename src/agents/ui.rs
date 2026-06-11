@@ -423,7 +423,7 @@ fn render(frame: &mut Frame, model: &mut Model) {
         Some(msg) => (
             format!(" ⓘ  {}", sanitize(msg)),
             Style::default()
-                .fg(theme::YELLOW)
+                .fg(theme::palette().yellow)
                 .add_modifier(Modifier::BOLD),
         ),
         None => (
@@ -445,7 +445,7 @@ fn render(frame: &mut Frame, model: &mut Model) {
     ) {
         (Some(err), _) => Some((
             format!("  tmux unavailable: {}", sanitize(err)),
-            Style::default().fg(theme::RED),
+            Style::default().fg(theme::palette().red),
         )),
         (None, true) => Some((
             "  no tmux panes or codex jobs found".to_string(),
@@ -543,13 +543,13 @@ fn pad(s: &str, width: usize) -> String {
 
 fn build_row(agent: &Agent) -> Row<'static> {
     let status_style = match agent.status {
-        Status::Working => Style::default().fg(theme::GREEN),
-        Status::Ready => Style::default().fg(theme::BLUE),
+        Status::Working => Style::default().fg(theme::palette().green),
+        Status::Ready => Style::default().fg(theme::palette().blue),
         Status::AwaitingDecision => Style::default()
-            .fg(theme::YELLOW)
+            .fg(theme::palette().yellow)
             .add_modifier(Modifier::BOLD),
         Status::Idle => theme::muted_style(),
-        Status::Background => Style::default().fg(theme::PURPLE),
+        Status::Background => Style::default().fg(theme::palette().purple),
     };
     let status_cell = Line::from(vec![
         Span::styled(agent.status.glyph().to_string(), status_style),
@@ -558,9 +558,9 @@ fn build_row(agent: &Agent) -> Row<'static> {
     ]);
 
     let kind_style = match agent.kind {
-        AgentKind::Claude => Style::default().fg(theme::ORANGE),
-        AgentKind::Codex => Style::default().fg(theme::BLUE),
-        AgentKind::Custom => Style::default().fg(theme::PURPLE),
+        AgentKind::Claude => Style::default().fg(theme::palette().orange),
+        AgentKind::Codex => Style::default().fg(theme::palette().blue),
+        AgentKind::Custom => Style::default().fg(theme::palette().purple),
         AgentKind::Shell => theme::muted_style(),
         AgentKind::Other => theme::muted_style(),
     };
@@ -601,10 +601,16 @@ fn build_row(agent: &Agent) -> Row<'static> {
 fn build_flag_line(agent: &Agent) -> Line<'static> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     if agent.flags.has_intent {
-        spans.push(Span::styled("intent ", Style::default().fg(theme::VIOLET)));
+        spans.push(Span::styled(
+            "intent ",
+            Style::default().fg(theme::palette().violet),
+        ));
     }
     if agent.flags.reviewed_fresh {
-        spans.push(Span::styled("reviewed ", Style::default().fg(theme::GREEN)));
+        spans.push(Span::styled(
+            "reviewed ",
+            Style::default().fg(theme::palette().green),
+        ));
     }
     if spans.is_empty() {
         spans.push(Span::styled("—", theme::muted_style()));
