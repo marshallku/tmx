@@ -424,6 +424,9 @@ grouped_session\tfoo\tbar";
     #[test]
     fn count_saved_sessions_empty_or_irrelevant() {
         assert_eq!(count_saved_sessions(""), 0);
-        assert_eq!(count_saved_sessions("state\tx\ty\ngrouped_session\ta\tb"), 0);
+        assert_eq!(
+            count_saved_sessions("state\tx\ty\ngrouped_session\ta\tb"),
+            0
+        );
     }
 }

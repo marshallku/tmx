@@ -44,14 +44,40 @@ impl Config {
     }
 
     pub fn load_from(path: &Path) -> Self {
+        let (cfg, warning) = Self::load_from_with_warning(path);
+        if let Some(warning) = warning {
+            eprintln!("tmx: warning: {warning}");
+        }
+        cfg
+    }
+
+    /// Load a config, reporting why it fell back to defaults (if it did) instead of
+    /// swallowing the failure. A missing file is the normal "no config" case and
+    /// produces no warning; unreadable or unparsable files do.
+    pub fn load_from_with_warning(path: &Path) -> (Self, Option<String>) {
         // Overlay-merge onto defaults: a partial config (e.g. `[worktree] naming = "..."`
         // with no `roots` key) must keep the default `~/dev` root. Parsing directly into
         // `Config` would silently zero out absent fields via `#[serde(default)]`.
-        let Ok(data) = std::fs::read_to_string(path) else {
-            return Self::defaults();
+        let data = match std::fs::read_to_string(path) {
+            Ok(data) => data,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return (Self::defaults(), None);
+            }
+            Err(err) => {
+                let warning = format!(
+                    "failed to read config {} (using defaults): {err}",
+                    path.display()
+                );
+                return (Self::defaults(), Some(warning));
+            }
         };
-        let Ok(partial) = toml::from_str::<PartialConfig>(&data) else {
-            return Self::defaults();
+        let partial = match toml::from_str::<PartialConfig>(&data) {
+            Ok(partial) => partial,
+            Err(err) => {
+                // The TOML error is multi-line; lead with the fallback note so it isn't buried.
+                let warning = format!("invalid config {} (using defaults): {err}", path.display());
+                return (Self::defaults(), Some(warning));
+            }
         };
 
         let mut cfg = Self::defaults();
@@ -79,7 +105,7 @@ impl Config {
             .map(|(k, v)| (expand_home(k), v.clone()))
             .collect();
 
-        cfg
+        (cfg, None)
     }
 }
 
@@ -168,6 +194,44 @@ mod tests {
         std::fs::write(&path, "this is = not = valid").unwrap();
         let cfg = Config::load_from(&path);
         assert_eq!(cfg.worktree.naming, DEFAULT_NAMING);
+    }
+
+    #[test]
+    fn load_from_missing_file_emits_no_warning() {
+        let dir = TempDir::new().unwrap();
+        let (_, warning) = Config::load_from_with_warning(&dir.path().join("nope.toml"));
+        assert_eq!(warning, None);
+    }
+
+    #[test]
+    fn load_from_invalid_toml_emits_warning_with_path() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "this is = not = valid").unwrap();
+        let (cfg, warning) = Config::load_from_with_warning(&path);
+        assert_eq!(cfg.worktree.naming, DEFAULT_NAMING);
+        let warning = warning.expect("broken config must produce a warning");
+        assert!(warning.contains("invalid config"));
+        assert!(warning.contains(&path.display().to_string()));
+    }
+
+    #[test]
+    fn load_from_unreadable_file_emits_warning() {
+        // A directory at the config path is unreadable as a file but is not NotFound.
+        let dir = TempDir::new().unwrap();
+        let (cfg, warning) = Config::load_from_with_warning(dir.path());
+        assert_eq!(cfg.worktree.naming, DEFAULT_NAMING);
+        let warning = warning.expect("unreadable config must produce a warning");
+        assert!(warning.contains("failed to read config"));
+    }
+
+    #[test]
+    fn load_from_valid_toml_emits_no_warning() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "roots = [\"/opt/projects\"]\n").unwrap();
+        let (_, warning) = Config::load_from_with_warning(&path);
+        assert_eq!(warning, None);
     }
 
     #[test]
