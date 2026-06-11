@@ -129,9 +129,12 @@ enum WorktreeCommand {
 pub fn run() -> Result<()> {
     config::ensure_config_dir();
     let cli = Cli::parse();
-    // Install the user palette before any TUI renders. Cheap (one small
-    // file read) and uniform across commands.
-    ui::theme::init(&Config::load().theme);
+    // Install the user palette + key maps before any TUI renders. Cheap
+    // (one small file read) and uniform across commands.
+    let cfg = Config::load();
+    ui::theme::init(&cfg.theme);
+    ui::keys::init(&cfg.keys);
+    drop(cfg);
     match cli.command {
         None => run_selector(),
         Some(Command::Agents { json }) => run_agents(json),

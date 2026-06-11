@@ -1,3 +1,4 @@
+pub mod keys;
 pub mod picker;
 pub mod project_selector;
 pub mod session_switcher;

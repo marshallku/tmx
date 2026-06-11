@@ -14,6 +14,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use ratatui::{Frame, Terminal};
 
+use crate::ui::keys::{self, Action};
 use crate::ui::{fuzzy_match, theme};
 
 pub trait PickerItem: Clone {
@@ -111,19 +112,25 @@ impl<T: PickerItem> Model<T> {
         if key.kind != KeyEventKind::Press {
             return;
         }
+        // Bound chrome keys win over search input — a user who binds a plain
+        // character to an action gives up typing it into the filter.
+        if let Some(action) = keys::picker_map().action(&key) {
+            match action {
+                Action::Quit => self.quit = true,
+                Action::Select => {
+                    if !self.filtered_idx.is_empty() {
+                        self.selected = Some(self.filtered_idx[self.cursor]);
+                        self.quit = true;
+                    }
+                }
+                Action::Up => self.move_up(),
+                Action::Down => self.move_down(),
+                // Attention actions are dashboard-only; ignore here.
+                Action::JumpAttention | Action::AttentionPicker => {}
+            }
+            return;
+        }
         match key.code {
-            KeyCode::Esc => self.quit = true,
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.quit = true;
-            }
-            KeyCode::Enter if !self.filtered_idx.is_empty() => {
-                self.selected = Some(self.filtered_idx[self.cursor]);
-                self.quit = true;
-            }
-            KeyCode::Up => self.move_up(),
-            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => self.move_up(),
-            KeyCode::Down => self.move_down(),
-            KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => self.move_down(),
             KeyCode::Backspace => {
                 self.search.pop();
                 self.refilter();

@@ -18,6 +18,18 @@ pub struct Config {
     /// applied by `ui::theme::init`; unknown keys / bad values warn there.
     #[serde(default)]
     pub theme: HashMap<String, String>,
+    /// `[keys.picker]` / `[keys.agents]` binding overrides
+    /// (`quit = ["esc", "ctrl-q"]` …). Validated by `ui::keys::init`.
+    #[serde(default)]
+    pub keys: KeysConfig,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct KeysConfig {
+    #[serde(default)]
+    pub picker: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    pub agents: HashMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -65,6 +77,7 @@ impl Config {
             },
             agents: AgentsConfig::default(),
             theme: HashMap::new(),
+            keys: KeysConfig::default(),
         }
     }
 
@@ -135,6 +148,9 @@ impl Config {
         if let Some(theme) = partial.theme {
             cfg.theme = theme;
         }
+        if let Some(keys) = partial.keys {
+            cfg.keys = keys;
+        }
 
         if cfg.worktree.naming.is_empty() {
             cfg.worktree.naming = DEFAULT_NAMING.to_string();
@@ -158,6 +174,7 @@ struct PartialConfig {
     worktree: Option<PartialWorktreeConfig>,
     agents: Option<PartialAgentsConfig>,
     theme: Option<HashMap<String, String>>,
+    keys: Option<KeysConfig>,
 }
 
 #[derive(Debug, Default, Deserialize)]

@@ -11,7 +11,7 @@ use std::io;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -25,6 +25,7 @@ use ratatui::{Frame, Terminal};
 
 use crate::config::Config;
 use crate::tmux;
+use crate::ui::keys::{self, Action as KeyAction};
 use crate::ui::theme;
 
 use super::attention::{self, AttentionEntry};
@@ -147,25 +148,19 @@ impl Model {
         // Any real keypress clears the previous notice; specific arms
         // re-set it if they have new feedback to surface.
         self.notice = None;
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => self.quit = true,
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.quit = true;
-            }
-            KeyCode::Up | KeyCode::Char('k') => self.move_up(),
-            KeyCode::Down | KeyCode::Char('j') => self.move_down(),
-            KeyCode::Enter => self.activate_selection(),
-            // Mirror the existing `prefix+a` / `prefix+A` tmux bindings:
-            // lowercase a = jump to newest attention, uppercase A = full
-            // fzf picker over the queue. Both hand off to the bash scripts
-            // after raw mode is torn down.
-            //
-            // 'a' is guarded against the empty-queue case. Without the
-            // guard, pressing 'a' with no fresh entries would close the
-            // popup with no visible action (the script just exits) —
-            // looks identical to a crash. Better to keep the dashboard
-            // open and tell the user why nothing happened.
-            KeyCode::Char('a') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+        // Defaults mirror the legacy hardcoded keys (q/esc quit, j/k nav,
+        // a/A attention — matching the tmux `prefix+a`/`prefix+A`
+        // bindings); `[keys.agents]` in config overrides per action.
+        match keys::agents_map().action(&key) {
+            Some(KeyAction::Quit) => self.quit = true,
+            Some(KeyAction::Up) => self.move_up(),
+            Some(KeyAction::Down) => self.move_down(),
+            Some(KeyAction::Select) => self.activate_selection(),
+            // Guarded against the empty-queue case. Without the guard,
+            // jumping with no fresh entries would close the popup with no
+            // visible action (the script just exits) — looks identical to
+            // a crash. Better to keep the dashboard open and say why.
+            Some(KeyAction::JumpAttention) => {
                 if self.snapshot.attention.is_empty() {
                     self.notice = Some("no fresh attention to jump to".to_string());
                 } else {
@@ -173,11 +168,11 @@ impl Model {
                     self.quit = true;
                 }
             }
-            KeyCode::Char('A') => {
+            Some(KeyAction::AttentionPicker) => {
                 self.pending_action = Some(Action::OpenAttentionPicker);
                 self.quit = true;
             }
-            _ => {}
+            None => {}
         }
     }
 
