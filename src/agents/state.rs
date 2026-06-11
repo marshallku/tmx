@@ -113,7 +113,7 @@ pub fn find_repo_root(path: &Path) -> Option<PathBuf> {
 /// companion writes one workspace directory per repo, each with a single
 /// `state.json` carrying the full job history — we filter to the still-
 /// active ones so the dashboard isn't dominated by completed tasks.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct CodexJob {
     /// Stable per-job identifier (used as the cursor anchor key, so
     /// navigation survives across refreshes).

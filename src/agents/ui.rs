@@ -711,6 +711,7 @@ mod tests {
             global_blocked: 2,
             panes_error: None,
             attention: Vec::new(),
+            codex_jobs: Vec::new(),
         };
         let s = build_summary(&snap);
         assert!(s.contains("rows: 4"));
@@ -753,6 +754,7 @@ mod tests {
                     tmux_session: String::new(),
                 },
             ],
+            codex_jobs: Vec::new(),
         };
         let s = build_summary(&snap);
         assert!(s.contains("attention: 2"));

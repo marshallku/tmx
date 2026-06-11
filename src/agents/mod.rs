@@ -140,6 +140,12 @@ pub struct Snapshot {
     /// hooks). Newest first. Pre-filtered to the same 1h cutoff
     /// `attention-picker.sh` uses so the two surfaces agree on what's pending.
     pub attention: Vec<attention::AttentionEntry>,
+    /// Live codex-companion background jobs, structured. The same jobs are
+    /// folded into `agents[]` (kind=codex, status=bg) for the TUI, but that
+    /// shape is lossy — `extra` flattens title/status/age into one display
+    /// string. Machine consumers (copad's web-bridge cockpit) read this
+    /// field instead of re-parsing `~/.claude/state/codex-companion/`.
+    pub codex_jobs: Vec<state::CodexJob>,
 }
 
 fn serialize_epoch_ms<S: serde::Serializer>(t: &SystemTime, s: S) -> Result<S::Ok, S::Error> {
@@ -158,10 +164,45 @@ impl Snapshot {
             global_blocked: 0,
             panes_error: None,
             attention: Vec::new(),
+            codex_jobs: Vec::new(),
         }
     }
 }
 
 pub fn run() -> anyhow::Result<()> {
     ui::run()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `--json` contract for machine consumers (copad web-bridge):
+    /// `codex_jobs` carries the structured rows with snake_case fields —
+    /// the lossy `agents[]` fold (extra: "running • 3m ago") is for the
+    /// TUI only. Renaming any field here breaks downstream deserializers.
+    #[test]
+    fn snapshot_json_exposes_structured_codex_jobs() {
+        let mut snap = Snapshot::empty();
+        snap.codex_jobs.push(state::CodexJob {
+            id: "task-abc".into(),
+            title: "Review diff".into(),
+            kind_label: "task".into(),
+            workspace_root: PathBuf::from("/home/u/dev/copad"),
+            status: "running".into(),
+            started_at_ms: Some(1_700_000_000_000),
+            updated_at_ms: Some(1_700_000_001_000),
+            pid: Some(4242),
+        });
+        let json = serde_json::to_value(&snap).unwrap();
+        let job = &json["codex_jobs"][0];
+        assert_eq!(job["id"], "task-abc");
+        assert_eq!(job["title"], "Review diff");
+        assert_eq!(job["kind_label"], "task");
+        assert_eq!(job["workspace_root"], "/home/u/dev/copad");
+        assert_eq!(job["status"], "running");
+        assert_eq!(job["started_at_ms"], 1_700_000_000_000_i64);
+        assert_eq!(job["updated_at_ms"], 1_700_000_001_000_i64);
+        assert_eq!(job["pid"], 4242);
+    }
 }

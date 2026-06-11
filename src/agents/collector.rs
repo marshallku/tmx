@@ -47,6 +47,7 @@ pub fn collect(proc: &ProcSnapshot) -> Snapshot {
         global_blocked: markers.blocked_count,
         panes_error,
         attention: attention::read_recent(ATTENTION_CUTOFF_SECS),
+        codex_jobs,
     }
 }
 
