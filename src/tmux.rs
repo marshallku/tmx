@@ -348,8 +348,24 @@ pub fn cleanup_sessions() -> io::Result<Vec<String>> {
 /// Normalise a tmux session name. Mirrors the convention used elsewhere
 /// (dots and slashes become safe characters).
 pub fn safe_session_name(repo: &str, branch: &str) -> String {
-    let combined = format!("{repo}-{branch}");
-    combined.replace('/', "-").replace('.', "_")
+    sanitize_session_name(&format!("{repo}-{branch}")).replace('/', "-")
+}
+
+/// Mirror tmux's own `session_check_name` normalisation (`:` and `.` become
+/// `_`, control characters stripped). tmux silently applies this on
+/// `new-session`, so creating with the raw name and then targeting it by that
+/// raw name fails — `:` is the `session:window` separator. Sanitising upfront
+/// keeps the name we create and the name we target identical.
+pub fn sanitize_session_name(name: &str) -> String {
+    name.chars()
+        .filter(|c| !c.is_control())
+        .map(|c| match c {
+            ':' | '.' => '_',
+            c => c,
+        })
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
 
 #[cfg(test)]
@@ -406,6 +422,34 @@ mod tests {
     fn safe_session_name_replaces_special_chars() {
         assert_eq!(safe_session_name("my.repo", "feat/x"), "my_repo-feat-x");
         assert_eq!(safe_session_name("plain", "main"), "plain-main");
+    }
+
+    #[test]
+    fn safe_session_name_replaces_colons() {
+        // `:` is the tmux `session:window` target separator; tmux itself
+        // rewrites it to `_` on new-session.
+        assert_eq!(safe_session_name("repo", "feat:x"), "repo-feat_x");
+    }
+
+    #[test]
+    fn sanitize_session_name_mirrors_tmux_rewrite() {
+        assert_eq!(sanitize_session_name("has:colon"), "has_colon");
+        assert_eq!(sanitize_session_name("has.dot"), "has_dot");
+        assert_eq!(sanitize_session_name("plain-name"), "plain-name");
+    }
+
+    #[test]
+    fn sanitize_session_name_strips_control_chars_and_trims() {
+        assert_eq!(sanitize_session_name("a\tb\nc"), "abc");
+        assert_eq!(sanitize_session_name("  padded  "), "padded");
+        assert_eq!(sanitize_session_name("한글 세션"), "한글 세션");
+    }
+
+    #[test]
+    fn sanitize_session_name_empty_inputs() {
+        assert_eq!(sanitize_session_name(""), "");
+        assert_eq!(sanitize_session_name("  \t\n "), "");
+        assert_eq!(sanitize_session_name("::"), "__");
     }
 
     #[test]

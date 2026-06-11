@@ -224,10 +224,19 @@ fn run_list(json: bool) -> Result<()> {
 fn run_switch(name: Option<&str>) -> Result<()> {
     deps::require("tmux")?;
     if let Some(name) = name {
-        if !tmux::session_exists(name) {
-            tmux::create_session(name, "").context("failed to create session")?;
+        let sanitized = tmux::sanitize_session_name(name);
+        if sanitized.is_empty() {
+            bail!("session name is empty (after dropping characters tmux disallows)");
         }
-        return tmux::switch_session(name).context("failed to switch session");
+        if sanitized != name {
+            // tmux would apply the same rewrite on new-session anyway; doing it
+            // upfront keeps create and switch targeting the same name.
+            eprintln!("tmx: using session name '{sanitized}' (tmux disallows ':' and '.')");
+        }
+        if !tmux::session_exists(&sanitized) {
+            tmux::create_session(&sanitized, "").context("failed to create session")?;
+        }
+        return tmux::switch_session(&sanitized).context("failed to switch session");
     }
 
     let sessions = match tmux::list_sessions() {
