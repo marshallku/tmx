@@ -95,14 +95,37 @@ fn shell_init_zsh_emits_twt_function() {
 }
 
 #[test]
-fn shell_init_unknown_shell_fails_with_message() {
+fn shell_init_bash_emits_twt_function() {
+    let temp = TempDir::new().unwrap();
+    isolated_cmd(temp.path(), None)
+        .args(["shell-init", "bash"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("twt()"))
+        .stdout(predicate::str::contains("tmx worktree"))
+        .stdout(predicate::str::contains("emulate").not());
+}
+
+#[test]
+fn shell_init_fish_emits_twt_function() {
     let temp = TempDir::new().unwrap();
     isolated_cmd(temp.path(), None)
         .args(["shell-init", "fish"])
         .assert()
+        .success()
+        .stdout(predicate::str::contains("function twt"))
+        .stdout(predicate::str::contains("tmx worktree"));
+}
+
+#[test]
+fn shell_init_unknown_shell_fails_with_message() {
+    let temp = TempDir::new().unwrap();
+    isolated_cmd(temp.path(), None)
+        .args(["shell-init", "powershell"])
+        .assert()
         .failure()
         .stderr(predicate::str::contains("unsupported shell"))
-        .stderr(predicate::str::contains("fish"));
+        .stderr(predicate::str::contains("powershell"));
 }
 
 #[test]

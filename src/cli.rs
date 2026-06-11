@@ -62,10 +62,10 @@ enum Command {
     /// Emit shell integration code (defines the 'twt' wrapper)
     #[command(
         name = "shell-init",
-        long_about = "Emit shell initialization code that defines a 'twt' function\nrouting to 'tmx worktree …'.\n\nAdd to your shell rc:\n\n    eval \"$(tmx shell-init zsh)\"\n\nThen:\n\n    twt feat-x                 # create worktree + spawn/switch tmux session (default)\n    twt feat-x --keep-current  # create only; cd into the new worktree (no tmux switch)\n    twt feat-x -p              # create only; print path (no cd, no tmux switch)\n    twt rm [target]            # remove a worktree (picker if no target)\n    twt rm -d [target]         # remove a worktree and delete its branch\n    twt list                   # picker → cd into the selected worktree\n    twt list <target>          # cd into the named worktree (path or short branch)\n    twt list --plain           # dump all worktrees as plain text (no cd)\n\nSupported shells: zsh."
+        long_about = "Emit shell initialization code that defines a 'twt' function\nrouting to 'tmx worktree …'.\n\nAdd to your shell rc:\n\n    eval \"$(tmx shell-init zsh)\"\n\nThen:\n\n    twt feat-x                 # create worktree + spawn/switch tmux session (default)\n    twt feat-x --keep-current  # create only; cd into the new worktree (no tmux switch)\n    twt feat-x -p              # create only; print path (no cd, no tmux switch)\n    twt rm [target]            # remove a worktree (picker if no target)\n    twt rm -d [target]         # remove a worktree and delete its branch\n    twt list                   # picker → cd into the selected worktree\n    twt list <target>          # cd into the named worktree (path or short branch)\n    twt list --plain           # dump all worktrees as plain text (no cd)\n\nSupported shells: zsh, bash, fish."
     )]
     ShellInit {
-        /// Shell name (currently only 'zsh')
+        /// Shell name ('zsh', 'bash', or 'fish')
         shell: String,
     },
 }
