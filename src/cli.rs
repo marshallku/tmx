@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand};
 
 use crate::agents;
 use crate::config::{self, Config};
+use crate::deps;
 use crate::project::{self};
 use crate::shell_init;
 use crate::tmux;
@@ -147,6 +148,7 @@ pub fn run() -> Result<()> {
 }
 
 fn run_selector() -> Result<()> {
+    deps::require("tmux")?;
     let cfg = Config::load();
     let projects = project::scan_projects(&cfg);
     if projects.is_empty() {
@@ -173,10 +175,12 @@ fn run_agents(json: bool) -> Result<()> {
         writeln!(handle).ok();
         return Ok(());
     }
+    deps::require("tmux")?;
     agents::run()
 }
 
 fn run_cleanup() -> Result<()> {
+    deps::require("tmux")?;
     let killed = tmux::cleanup_sessions().context("cleanup failed")?;
     if killed.is_empty() {
         println!("No unattached sessions to clean up.");
@@ -198,6 +202,7 @@ fn run_list(json: bool) -> Result<()> {
         return Ok(());
     }
 
+    deps::require("tmux")?;
     let sessions = match tmux::list_sessions() {
         Ok(s) => s,
         Err(_) => {
@@ -217,6 +222,7 @@ fn run_list(json: bool) -> Result<()> {
 }
 
 fn run_switch(name: Option<&str>) -> Result<()> {
+    deps::require("tmux")?;
     if let Some(name) = name {
         if !tmux::session_exists(name) {
             tmux::create_session(name, "").context("failed to create session")?;
@@ -255,6 +261,12 @@ fn run_switch(name: Option<&str>) -> Result<()> {
 }
 
 fn run_worktree_create(branch: &str, keep_current: bool, from: &str) -> Result<()> {
+    deps::require("git")?;
+    if !keep_current {
+        // The tmux session is created only after the worktree exists; check
+        // upfront so a missing tmux doesn't leave a worktree behind mid-flow.
+        deps::require("tmux")?;
+    }
     let cfg = Config::load();
     let res = worktree::create(
         worktree::Options {
@@ -285,6 +297,7 @@ fn run_worktree_create(branch: &str, keep_current: bool, from: &str) -> Result<(
 }
 
 fn run_worktree_list(target: Option<&str>, plain: bool, json: bool) -> Result<()> {
+    deps::require("git")?;
     let cwd = std::env::current_dir().context("resolve cwd")?;
     let entries = worktree::list_entries(&cwd)?;
 
@@ -350,6 +363,7 @@ fn run_worktree_list(target: Option<&str>, plain: bool, json: bool) -> Result<()
 }
 
 fn run_worktree_rm(target: Option<&str>, force: bool) -> Result<()> {
+    deps::require("git")?;
     let cwd = std::env::current_dir().context("resolve cwd")?;
     let entries = worktree::list_entries(&cwd)?;
 
