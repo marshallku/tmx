@@ -99,8 +99,15 @@ fn build_pane_agent(
         None => {
             let kind = AgentKind::from_command(&pane.current_command);
             // No agent process — the pane is at a plain shell or running
-            // something we don't classify. All of these are idle.
-            (kind, pane.current_path.clone(), Status::Idle, String::new())
+            // something we don't classify. All of these are idle. Surface
+            // the actual foreground command so a `shell`/`other` row still
+            // tells the user what is running there.
+            (
+                kind,
+                pane.current_path.clone(),
+                Status::Idle,
+                pane.current_command.clone(),
+            )
         }
     };
 
